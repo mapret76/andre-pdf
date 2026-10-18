@@ -27,6 +27,7 @@
 #include "pdfform.h"
 #include "pdfdocumentreader.h"
 #include "pdfdocumentwriter.h"
+#include "pdfocrapplyprocessor.h"
 
 #include <QtTest>
 #include <QBuffer>
@@ -87,6 +88,9 @@ private slots:
     void preservesAcroForm();
     void widgetStructure_data();
     void widgetStructure();
+    void certification_data();
+    void certification();
+    void certificationMustBeFirst();
 
 private:
     static bool createTestCertificate(const QTemporaryDir& directory, PDFCertificateEntry& certificate, QString& password);
@@ -99,7 +103,8 @@ private:
                                                   const PDFCertificateEntry& certificate,
                                                   const QString& password,
                                                   const QString& fieldName,
-                                                  QByteArray& signedDocument);
+                                                  QByteArray& signedDocument,
+                                                  PDFDocumentSigner::Certification certification = PDFDocumentSigner::Certification::None);
 };
 
 PDFDocument SignatureBuilderTest::readDocument(const QByteArray& data)
@@ -113,11 +118,13 @@ PDFDocumentSigner::Result SignatureBuilderTest::signDocument(const PDFDocument& 
                                                              const PDFCertificateEntry& certificate,
                                                              const QString& password,
                                                              const QString& fieldName,
-                                                             QByteArray& signedDocument)
+                                                             QByteArray& signedDocument,
+                                                             PDFDocumentSigner::Certification certification)
 {
     PDFDocumentSigner::Parameters parameters;
     parameters.document = &document;
     parameters.originalDocumentData = originalData;
+    parameters.certification = certification;
     parameters.signFunction = [&](const QByteArray& data, QByteArray& signature)
     {
         return PDFSignatureFactory::sign(certificate, password, data, signature);
@@ -612,6 +619,93 @@ void SignatureBuilderTest::widgetStructure()
     {
         QVERIFY(widget->get("AP").isNull());
     }
+}
+
+void SignatureBuilderTest::certification_data()
+{
+    QTest::addColumn<int>("certification");
+    QTest::addColumn<int>("expectedPermissions");
+
+    QTest::newRow("no-changes") << int(PDFDocumentSigner::Certification::NoChanges) << int(PDFOCRApplyProcessor::CertificationPermissions::NoChanges);
+    QTest::newRow("form-filling") << int(PDFDocumentSigner::Certification::FormFilling) << int(PDFOCRApplyProcessor::CertificationPermissions::FormFilling);
+    QTest::newRow("annotations") << int(PDFDocumentSigner::Certification::FormFillingAndAnnotations) << int(PDFOCRApplyProcessor::CertificationPermissions::FormFillingAndAnnotations);
+}
+
+void SignatureBuilderTest::certification()
+{
+    QFETCH(int, certification);
+    QFETCH(int, expectedPermissions);
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    PDFCertificateEntry certificate;
+    QString password;
+    QVERIFY(createTestCertificate(directory, certificate, password));
+
+    PDFDocumentBuilder builder;
+    builder.appendPage(QRectF(0, 0, 300, 400));
+    const PDFDocument document = builder.build();
+
+    QByteArray signedData;
+    QCOMPARE(signDocument(document, QByteArray(), certificate, password, "Certification", signedData, PDFDocumentSigner::Certification(certification)), PDFDocumentSigner::Result::OK);
+
+    const PDFDocument signedDocument = readDocument(signedData);
+    QCOMPARE(int(PDFOCRApplyProcessor::getCertificationPermissions(&signedDocument)), expectedPermissions);
+
+    // Catalog /Perms /DocMDP references the signature dictionary of the field,
+    // whose only signature reference is the DocMDP transform (version 1.2)
+    const PDFObject& permsObject = signedDocument.getObject(signedDocument.getCatalog()->getPerms());
+    QVERIFY(permsObject.isDictionary());
+    const PDFObject docMDP = permsObject.getDictionary()->get("DocMDP");
+    QVERIFY(docMDP.isReference());
+
+    const PDFForm form = PDFForm::parse(&signedDocument, signedDocument.getCatalog()->getFormObject());
+    const PDFFormFieldSignature* field = nullptr;
+    form.apply([&field](const PDFFormField* formField) { field = dynamic_cast<const PDFFormFieldSignature*>(formField); });
+    QVERIFY(field);
+    const PDFDictionary* fieldDictionary = signedDocument.getDictionaryFromObject(signedDocument.getObjectByReference(field->getSelfReference()));
+    QVERIFY(fieldDictionary);
+    QCOMPARE(fieldDictionary->get("V").getReference(), docMDP.getReference());
+
+    const std::vector<PDFSignatureReference>& references = field->getSignature().getReferences();
+    QCOMPARE(references.size(), size_t(1));
+    QCOMPARE(references.front().getTransformMethod(), PDFSignatureReference::TransformMethod::DocMDP);
+    const PDFDictionary* transformParams = signedDocument.getDictionaryFromObject(references.front().getTransformParams());
+    QVERIFY(transformParams);
+    QCOMPARE(transformParams->get("P").getInteger(), PDFInteger(certification));
+    QCOMPARE(transformParams->get("V").getString(), QByteArray("1.2"));
+
+    const auto results = verifySignedDocument(signedData);
+    QCOMPARE(results.size(), size_t(1));
+    QVERIFY2(results.front().isSignatureValid(), qPrintable(results.front().getErrors().join('\n')));
+}
+
+void SignatureBuilderTest::certificationMustBeFirst()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    PDFCertificateEntry certificate;
+    QString password;
+    QVERIFY(createTestCertificate(directory, certificate, password));
+
+    PDFDocumentBuilder builder;
+    builder.appendPage(QRectF(0, 0, 300, 400));
+    const PDFDocument document = builder.build();
+
+    QByteArray approved;
+    QCOMPARE(signDocument(document, QByteArray(), certificate, password, "Approval", approved), PDFDocumentSigner::Result::OK);
+
+    QByteArray certified;
+    QCOMPARE(signDocument(readDocument(approved), approved, certificate, password, "Certification", certified, PDFDocumentSigner::Certification::NoChanges),
+             PDFDocumentSigner::Result::CertificationNotFirst);
+    QVERIFY(certified.isEmpty());
+
+    // An approval signature after the certification keeps the certification
+    QVERIFY(signDocument(document, QByteArray(), certificate, password, "Certification", certified, PDFDocumentSigner::Certification::FormFilling) == PDFDocumentSigner::Result::OK);
+    QByteArray countersigned;
+    QCOMPARE(signDocument(readDocument(certified), certified, certificate, password, "Countersignature", countersigned), PDFDocumentSigner::Result::OK);
+    const PDFDocument countersignedDocument = readDocument(countersigned);
+    QCOMPARE(PDFOCRApplyProcessor::getCertificationPermissions(&countersignedDocument), PDFOCRApplyProcessor::CertificationPermissions::FormFilling);
 }
 
 QTEST_MAIN(SignatureBuilderTest)

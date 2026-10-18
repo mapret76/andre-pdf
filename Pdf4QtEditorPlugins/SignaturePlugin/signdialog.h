@@ -24,6 +24,7 @@
 #define SIGNDIALOG_H
 
 #include "pdfcertificatemanager.h"
+#include "pdfdocumentsigner.h"
 
 #include <QDialog>
 
@@ -40,7 +41,10 @@ class SignDialog : public QDialog
     Q_OBJECT
 
 public:
-    explicit SignDialog(QWidget* parent, bool isSceneEmpty);
+    /// \param parent Parent widget
+    /// \param isSceneEmpty No signature graphics were created
+    /// \param canCertify Document has no signature yet, so the signature can certify it
+    explicit SignDialog(QWidget* parent, bool isSceneEmpty, bool canCertify);
     virtual ~SignDialog() override;
 
     virtual void accept() override;
@@ -71,6 +75,7 @@ public:
     QString getReasonText() const;
     QString getContactInfoText() const;
     QString getTimestampUrl() const;
+    pdf::PDFDocumentSigner::Certification getCertification() const;
     const pdf::PDFCertificateEntry* getCertificate() const;
 
 private:
@@ -82,6 +87,7 @@ private:
 
     Ui::SignDialog* ui;
     pdf::PDFCertificateEntries m_certificates;
+    bool m_canCertify;
 };
 
 }   // namespace pdfplugin

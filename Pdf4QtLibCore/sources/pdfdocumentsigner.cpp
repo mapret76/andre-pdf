@@ -75,6 +75,14 @@ PDFDocumentSigner::Result PDFDocumentSigner::sign(const Parameters& parameters, 
     // they cover are not touched, so the document must be written as an
     // incremental update of the original data, which requires them.
     const bool preserveExistingSignatures = hasExistingSignatures(parameters.document);
+
+    // The certification signature must be the first signature of the document
+    // (ISO 32000-2, 12.8.2.2) and a document timestamp cannot certify it.
+    if (parameters.certification != Certification::None &&
+        (preserveExistingSignatures || parameters.signatureDictionaryType == DOCUMENT_TIMESTAMP_TYPE))
+    {
+        return Result::CertificationNotFirst;
+    }
     if (preserveExistingSignatures && parameters.originalDocumentData.isEmpty())
     {
         return Result::ExistingSignaturesNotPreserved;
@@ -167,6 +175,11 @@ PDFDocumentSigner::Result PDFDocumentSigner::signAttempt(const Parameters& param
             builder.setObject(signatureDictionary, PDFObject::createDictionary(qMove(timestampDictionary)));
         }
     }
+    if (parameters.certification != Certification::None)
+    {
+        addCertification(builder, signatureDictionary, parameters.certification);
+    }
+
     const PDFObjectReference signatureField = parameters.createSignatureFieldFunction(builder, signatureDictionary);
 
     PDFDocument documentToBeSigned = builder.build();
@@ -284,6 +297,52 @@ PDFDocumentSigner::Result PDFDocumentSigner::signAttempt(const Parameters& param
     return Result::OK;
 }
 
+void PDFDocumentSigner::addCertification(PDFDocumentBuilder& builder, PDFObjectReference signatureDictionary, Certification certification)
+{
+    Q_ASSERT(certification != Certification::None);
+
+    PDFObjectFactory factory;
+    factory.beginDictionary();
+    factory.beginDictionaryItem("Reference");
+    factory.beginArray();
+    factory.beginDictionary();
+    factory.beginDictionaryItem("Type");
+    factory << WrapName("SigRef");
+    factory.endDictionaryItem();
+    factory.beginDictionaryItem("TransformMethod");
+    factory << WrapName("DocMDP");
+    factory.endDictionaryItem();
+    factory.beginDictionaryItem("TransformParams");
+    factory.beginDictionary();
+    factory.beginDictionaryItem("Type");
+    factory << WrapName("TransformParams");
+    factory.endDictionaryItem();
+    factory.beginDictionaryItem("P");
+    factory << PDFInteger(certification);
+    factory.endDictionaryItem();
+    factory.beginDictionaryItem("V");
+    factory << WrapName("1.2");
+    factory.endDictionaryItem();
+    factory.endDictionary();
+    factory.endDictionaryItem();
+    factory.endDictionary();
+    factory.endArray();
+    factory.endDictionaryItem();
+    factory.endDictionary();
+    builder.mergeTo(signatureDictionary, factory.takeObject());
+
+    factory.beginDictionary();
+    factory.beginDictionaryItem("Perms");
+    factory.beginDictionary();
+    factory.beginDictionaryItem("DocMDP");
+    factory << signatureDictionary;
+    factory.endDictionaryItem();
+    factory.endDictionary();
+    factory.endDictionaryItem();
+    factory.endDictionary();
+    builder.mergeTo(builder.getCatalogReference(), factory.takeObject());
+}
+
 bool PDFDocumentSigner::verifySignedDocument(const QByteArray& signedDocument,
                                              PDFObjectReference signatureField,
                                              bool isDocumentTimestamp)
@@ -387,6 +446,9 @@ QString PDFDocumentSigner::getResultMessage(Result result)
 
         case Result::ExistingSignaturesNotPreserved:
             return tr("The document already contains digital signatures, which cannot be preserved, so the document was not signed.");
+
+        case Result::CertificationNotFirst:
+            return tr("The document can be certified only by its first signature, but it is already signed.");
 
         default:
             Q_ASSERT(false);

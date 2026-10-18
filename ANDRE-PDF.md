@@ -12,6 +12,9 @@ git-ignored.
 
 1. Installs on the Windows desktop.
 2. OCR, then edit text in the original font.
+   *Added 2026-10-18:* when the user picks OCR'd text to edit, the app identifies
+   the font in depth, checks whether it is installed, and if not, tells the user and
+   searches for the font to download and install, so the edit uses the same font.
 3. Add images, text boxes and signatures, saved into the PDF.
 4. Digitally sign with his personal certificate (selectable), with a visible box
    that lets a reader verify authenticity.
@@ -54,7 +57,7 @@ Andre can test himself.
 | 3 | **Contract packs**: four-slot signature library from scanned images (DPAPI-protected), initial all pages, find signature lines, sign several lines, Lock disabled until every line is signed, split a pack, batch initial-sign-lock | 5-6 weeks | A 3-contract pack splits, signs and locks in one go |
 | 4 | Review tools: highlight/comment polish, size reduction before signing, Word/Excel export, Windows Share (email/WhatsApp), contract redline on DocDiff | 6-8 weeks | Comment, shrink, export, share and compare a pack |
 | 5 | Android: 2-week proof of concept of Pdf4QtLibCore on arm64, then a Qt Quick touch UI on the same core; .pfx signing first, Android KeyChain later | 4-6 months | A file signed on Android shows as certified in Reader on a PC |
-| 6 | Font-matched editing of OCR'd scans | 2-3 weeks | 20 of Andre's scans: edits unnoticed at 100% zoom |
+| 6 | Font-matched editing of OCR'd scans: identify the font of the selected text, check it is installed, offer to find, download and install it (see "Phase 6 design notes") | 4-5 weeks | 20 of Andre's scans: the right family named for at least 16, and edits unnoticed at 100% zoom |
 | 7 | Scan-font engine (open ClearScan-style synthesised font) | 6-10 weeks | Zero 6/8 or l/1 glyph swaps on the 20-scan set |
 
 ### Rules the app must enforce (from the design work)
@@ -106,6 +109,44 @@ Acceptance: Acrobat Reader (free) shows the document as certified with the
 chosen permission, and an edit made afterwards in another tool is reported as
 a violation.
 
+## Phase 6 design notes (font identification and install)
+
+Requirement 2 as refined on 2026-10-18. When the user selects OCR'd text to edit:
+
+1. **Identify the font.** Do this in two tiers:
+   - *The text already has a font* (a born-digital PDF, or a page with a text
+     layer): read `/FontDescriptor /FontName` (strip the `ABCDEF+` subset prefix),
+     `/Flags`, `/Panose` and the widths. That gives the exact name.
+   - *A pure scan* (the OCR result only has word boxes): crop the glyphs of the
+     selected words and of the rest of the paragraph, then match them against
+     rendered candidates on x-height/cap-height ratio, stroke contrast, serif
+     presence, slant, advance widths and per-glyph shape distance on the common
+     letters (a, e, g, R, 1, 6). Candidates are the installed fonts plus the
+     Google Fonts catalogue. Show the top 3 with a preview, best first, and let the
+     user override. Do not rely on Tesseract's font attributes, because the LSTM
+     engine in 5.x no longer reports them reliably.
+   - Stays **local by default**. Online identifiers (WhatTheFont and similar)
+     would send contract images off the machine (confidentiality, POPIA s72), so at
+     most they are an opt-in per use.
+2. **Is it installed?** Look it up in `QFontDatabase` by family and style (on Windows
+   that covers the system fonts and the per-user fonts).
+3. **If not, prompt and search.** "This text is set in *X*, which is not installed."
+   - *Free licence* (OFL/Apache, e.g. the Google Fonts catalogue): offer Download
+     & install. Install per user, with no admin rights: copy to
+     `%LOCALAPPDATA%\Microsoft\Windows\Fonts` and add the `HKCU\Software\Microsoft\Windows NT\CurrentVersion\Fonts`
+     value, then `QFontDatabase::addApplicationFont` for this session.
+   - *Commercial font* (Helvetica, Frutiger, ...): never download it from an
+     unlicensed mirror. Say where it can be licensed, and offer the closest free
+     metric-compatible substitute (Arial -> Liberation Sans, Calibri -> Carlito,
+     Cambria -> Caladea, Helvetica -> TeX Gyre Heros, Times -> Liberation Serif),
+     marked as a substitute.
+4. **Edit and embed.** Write the edit with the chosen font embedded as a subset in the
+   PDF, so the file reads the same on a machine that does not have the font.
+
+Licences: the Google Fonts metadata and files are free to use; the matcher is ours.
+Phase 7 (a font synthesised from the scan's own glyphs) is the fallback when no
+candidate matches well.
+
 ## Building
 
 **Windows installer (the deliverable):** GitHub Actions workflow
@@ -153,3 +194,43 @@ upstream author's machine, not ours).
   vault: start with the skill, then this ledger. **Open:** Andre's install test
   of the Phase 1 MSI; then Phase 2 step 1 (certification level in
   `PDFDocumentSigner`), which wants a local vault build set up first.
+
+### 2026-10-18 (later) - Phase 2 started
+- Local vault build set up for the core library (no vcpkg): Ubuntu 26.04 packages
+  (Qt 6.10.2, OpenSSL, freetype, openjpeg, lcms2, TBB, ...) plus blend2d (no JIT)
+  and Clipper2 2.0.1 built from source into `~/.local/andre-pdf-deps` (sources in
+  `~/projects/andre-pdf-deps-src`). Configure:
+  `cmake -B build-core -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PREFIX_PATH=$HOME/.local/andre-pdf-deps -DPDF4QT_BUILD_ONLY_CORE_LIBRARY=ON -DPDF4QT_ENABLE_OCR=OFF`.
+  `build-*/` is git-ignored. The GUI and plugins are compile-checked by Linux CI.
+- **Step 1 done:** `PDFDocumentSigner::Parameters::certification` (None / NoChanges /
+  FormFilling / FormFillingAndAnnotations = DocMDP P 1/2/3). Writes the SigRef DocMDP
+  reference (`/V /1.2`) into the signature dictionary and catalog `/Perms /DocMDP`.
+  Refused with `Result::CertificationNotFirst` when the document is already signed
+  or for a document timestamp. Tests `certification` and `certificationMustBeFirst`
+  in `UnitTestsSignatureBuilder` (an approval signature after a certification keeps it).
+- **Step 3 done:** SignDialog has "Lock (certify)": No changes (default) / form filling
+  / form filling + comments / do not lock. Disabled when the document is already signed.
+  The choice is remembered.
+- **Step 4 partly:** a visible signature now carries a text stamp under the graphics:
+  "Electronically signed by <certificate CN>", the signing time, and the lock level.
+  QR code and document hash are still to do.
+- Step 2 (signature-field `/Lock` with `/P` for the last of several lines) moves to
+  Phase 3, where the multi-line flow that needs it is built. Step 5 (one-button
+  reduce/encrypt -> certify -> verify) is open.
+
+### 2026-10-18 (evening) - Phase 2 work committed; font requirement added
+- The core build had stopped on a missing `fontconfig/fontconfig.h`; installed
+  `libfontconfig-dev` on andre-vault. `build-core` now builds. Tests:
+  `UnitTestsSignatureBuilder` 47 passed (includes the new `certification` and
+  `certificationMustBeFirst`), `UnitTestsTimestamp` 29 passed, 1 skipped (public TSA).
+- Committed steps 1, 3 and the text stamp of step 4. The GUI and plugin compile is
+  left to Linux CI.
+- **Andre refined requirement 2:** before editing OCR'd text, identify the font in
+  depth, check it is installed, and if not, prompt the user and search, download
+  and install it. Design in "Phase 6 design notes": a local matcher, per-user
+  install of free fonts, and a licensed-source pointer or metric-compatible
+  substitute for commercial fonts. Phase 6 grows to 4-5 weeks. It stays after
+  contract signing (his priority).
+- **Open:** Andre's MSI install test (Phase 1 gate); step 4 QR code and document
+  hash; step 5 one-button Sign & Lock; acceptance in Acrobat Reader needs a new
+  MSI build that includes this work.

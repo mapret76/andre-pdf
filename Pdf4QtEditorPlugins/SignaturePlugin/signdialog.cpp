@@ -40,6 +40,7 @@ namespace signdialog
 constexpr const char* SETTINGS_GROUP = "SignaturePlugin";
 constexpr const char* SETTINGS_SIGNATURE_TYPE = "SignatureType";
 constexpr const char* SETTINGS_TIMESTAMP_URL = "TimestampUrl";
+constexpr const char* SETTINGS_CERTIFICATION = "Certification";
 
 /// Timestamp authorities offered to the user. The combo box is editable, so
 /// any other authority can be used, too.
@@ -54,9 +55,10 @@ constexpr const char* DEFAULT_TIMESTAMP_URLS[] =
 
 using namespace signdialog;
 
-SignDialog::SignDialog(QWidget* parent, bool isSceneEmpty) :
+SignDialog::SignDialog(QWidget* parent, bool isSceneEmpty, bool canCertify) :
     QDialog(parent),
-    ui(new Ui::SignDialog)
+    ui(new Ui::SignDialog),
+    m_canCertify(canCertify)
 {
     ui->setupUi(this);
 
@@ -74,6 +76,16 @@ SignDialog::SignDialog(QWidget* parent, bool isSceneEmpty) :
         ui->timestampUrlCombo->addItem(QString::fromLatin1(timestampUrl));
     }
     ui->timestampUrlCombo->setCurrentIndex(0);
+
+    // The certification locks the document, it must be its first signature.
+    // "No changes" is the default for a contract signed by one party.
+    ui->certificationCombo->addItem(tr("No changes allowed"), int(pdf::PDFDocumentSigner::Certification::NoChanges));
+    ui->certificationCombo->addItem(tr("Allow form filling and signing"), int(pdf::PDFDocumentSigner::Certification::FormFilling));
+    ui->certificationCombo->addItem(tr("Allow form filling, signing and comments"), int(pdf::PDFDocumentSigner::Certification::FormFillingAndAnnotations));
+    ui->certificationCombo->addItem(tr("Do not lock (approval signature)"), int(pdf::PDFDocumentSigner::Certification::None));
+    ui->certificationCombo->setCurrentIndex(m_canCertify ? 0 : ui->certificationCombo->count() - 1);
+    ui->certificationCombo->setToolTip(m_canCertify ? tr("Certifies the document by this signature. A reader is warned about any later change not allowed here.")
+                                                    : tr("The document is already signed, only its first signature can lock it."));
 
     m_certificates = pdf::PDFCertificateManager::getCertificates(pdf::PDFCertificateUsageFilter::DigitalSignature);
 
@@ -119,6 +131,16 @@ QString SignDialog::getContactInfoText() const
 QString SignDialog::getTimestampUrl() const
 {
     return ui->timestampUrlCombo->currentText().trimmed();
+}
+
+pdf::PDFDocumentSigner::Certification SignDialog::getCertification() const
+{
+    if (!m_canCertify || getSignatureType() == TimestampOnly)
+    {
+        return pdf::PDFDocumentSigner::Certification::None;
+    }
+
+    return static_cast<pdf::PDFDocumentSigner::Certification>(ui->certificationCombo->currentData().toInt());
 }
 
 const pdf::PDFCertificateEntry* SignDialog::getCertificate() const
@@ -192,6 +214,8 @@ void SignDialog::updateUi()
     ui->reasonEdit->setEnabled(isCertificateUsed);
     ui->contactInfoLabel->setEnabled(isCertificateUsed);
     ui->contactInfoEdit->setEnabled(isCertificateUsed);
+    ui->certificationLabel->setEnabled(isCertificateUsed && m_canCertify);
+    ui->certificationCombo->setEnabled(isCertificateUsed && m_canCertify);
 
     ui->timestampUrlLabel->setEnabled(isTimestampUsed);
     ui->timestampUrlCombo->setEnabled(isTimestampUsed);
@@ -214,6 +238,12 @@ void SignDialog::loadSettings()
         ui->timestampUrlCombo->setCurrentText(timestampUrl);
     }
 
+    const int certificationIndex = ui->certificationCombo->findData(settings.value(SETTINGS_CERTIFICATION, int(pdf::PDFDocumentSigner::Certification::NoChanges)).toInt());
+    if (m_canCertify && certificationIndex != -1)
+    {
+        ui->certificationCombo->setCurrentIndex(certificationIndex);
+    }
+
     settings.endGroup();
 }
 
@@ -223,6 +253,10 @@ void SignDialog::saveSettings()
     settings.beginGroup(SETTINGS_GROUP);
     settings.setValue(SETTINGS_SIGNATURE_TYPE, int(getSignatureType()));
     settings.setValue(SETTINGS_TIMESTAMP_URL, getTimestampUrl());
+    if (m_canCertify)
+    {
+        settings.setValue(SETTINGS_CERTIFICATION, ui->certificationCombo->currentData().toInt());
+    }
     settings.endGroup();
 }
 

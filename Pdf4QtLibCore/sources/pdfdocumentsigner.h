@@ -83,7 +83,19 @@ public:
         PlaceholderNotFound,            ///< Space reserved for the signature was not found in the written document
         SignatureTooLarge,              ///< Signature did not fit into the reserved space
         VerificationFailed,             ///< Newly created signature of the written document could not be verified
-        ExistingSignaturesNotPreserved  ///< Document contains signatures, which would be damaged by writing the document
+        ExistingSignaturesNotPreserved, ///< Document contains signatures, which would be damaged by writing the document
+        CertificationNotFirst           ///< Certification signature was requested, but it would not be the first signature of the document
+    };
+
+    /// Certification (DocMDP) of the document by the created signature, the value
+    /// is the permission /P of the transform parameters (ISO 32000-2, 12.8.2.2).
+    /// A certification signature must be the first signature of the document.
+    enum class Certification
+    {
+        None = 0,                       ///< Approval signature, the document is not certified
+        NoChanges = 1,                  ///< No changes of the document are permitted
+        FormFilling = 2,                ///< Filling of forms, instantiating of page templates and signing are permitted
+        FormFillingAndAnnotations = 3   ///< As FormFilling, plus creation, deletion and modification of annotations
     };
 
     struct Parameters
@@ -112,6 +124,9 @@ public:
         QByteArray signatureDictionaryType = "Sig";
 
         QDateTime signingTime = QDateTime::currentDateTime();
+
+        /// Certification of the document, only for a signature (not for a document timestamp)
+        Certification certification = Certification::None;
 
         /// Progress reporting of the document writer, can be nullptr
         PDFProgress* progress = nullptr;
@@ -148,6 +163,13 @@ private:
     /// offsets when the document is written
     static constexpr const char* BYTE_RANGE_MARK_STRING = "123456789123";
     static constexpr PDFInteger BYTE_RANGE_MARK = 123456789123;
+
+    /// Adds the DocMDP signature reference to the signature dictionary and the
+    /// catalog /Perms /DocMDP entry referencing the signature dictionary
+    /// \param builder Builder of the signed document
+    /// \param signatureDictionary Signature dictionary
+    /// \param certification Certification, must not be None
+    static void addCertification(PDFDocumentBuilder& builder, PDFObjectReference signatureDictionary, Certification certification);
 
     /// Returns the data signed only to find out the size of the signature
     static QByteArray getTrialData();

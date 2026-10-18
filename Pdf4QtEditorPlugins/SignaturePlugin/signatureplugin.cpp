@@ -31,6 +31,7 @@
 #include "pdfdocumentsigner.h"
 
 #include <QBuffer>
+#include <QFont>
 #include <QAction>
 #include <QApplication>
 #include <QToolButton>
@@ -336,7 +337,7 @@ void SignaturePlugin::onSignDigitally()
         onOpenCertificatesManager();
     }
 
-    SignDialog dialog(m_dataExchangeInterface->getMainWindow(), m_scene.isEmpty());
+    SignDialog dialog(m_dataExchangeInterface->getMainWindow(), m_scene.isEmpty(), !pdf::PDFDocumentSigner::hasExistingSignatures(m_document));
     if (dialog.exec() == SignDialog::Accepted)
     {
         const SignDialog::SignatureType signatureType = dialog.getSignatureType();
@@ -385,6 +386,31 @@ void SignaturePlugin::onSignDigitally()
         pdf::PDFDocumentSigner::Parameters parameters;
         parameters.document = m_document;
         parameters.progress = m_widget->getDrawWidgetProxy()->getProgress();
+        parameters.certification = dialog.getCertification();
+
+        // Text of the verification stamp drawn under the visible signature. It says
+        // who signed, when and how the document is locked; the proof itself is the
+        // digital signature, which the reader verifies in the signature panel.
+        QStringList stampLines;
+        if (visibleSignature)
+        {
+            stampLines << tr("Electronically signed by %1").arg(certificate->info.getName(pdf::PDFCertificateInfo::CommonName));
+            stampLines << parameters.signingTime.toString("yyyy-MM-dd HH:mm:ss t");
+            switch (parameters.certification)
+            {
+                case pdf::PDFDocumentSigner::Certification::NoChanges:
+                    stampLines << tr("Certified: no changes allowed");
+                    break;
+                case pdf::PDFDocumentSigner::Certification::FormFilling:
+                    stampLines << tr("Certified: form filling and signing allowed");
+                    break;
+                case pdf::PDFDocumentSigner::Certification::FormFillingAndAnnotations:
+                    stampLines << tr("Certified: form filling, signing and comments allowed");
+                    break;
+                case pdf::PDFDocumentSigner::Certification::None:
+                    break;
+            }
+        }
 
         if (isDocumentTimestamp)
         {
@@ -464,9 +490,30 @@ void SignaturePlugin::onSignDigitally()
                 QList<pdf::PDFRenderError> errors;
                 pdf::PDFTextLayoutGetter nullGetter(nullptr, pageIndex);
                 m_scene.drawElements(painter, pageIndex, nullGetter, QTransform(), nullptr, convertor, errors);
-                pdf::PDFContentStreamBuilder::ContentStream contentStream = contentBuilder.end(painter);
 
+                // The stamp is placed under the signature graphics (PDF coordinates, y goes up)
                 QRectF boundingRect = m_scene.getBoundingBox(pageIndex, true);
+                if (!stampLines.isEmpty())
+                {
+                    constexpr qreal fontSize = 7.0;
+                    constexpr qreal lineHeight = 9.0;
+                    const qreal stampHeight = lineHeight * stampLines.size() + 2.0;
+                    const QRectF stampRect(boundingRect.left(), boundingRect.top() - stampHeight, qMax(boundingRect.width(), 200.0), stampHeight);
+
+                    QFont font("Arial");
+                    font.setPixelSize(qRound(fontSize));
+                    painter->save();
+                    painter->setFont(font);
+                    painter->setPen(QColor(0, 0, 128));
+                    painter->translate(stampRect.center());
+                    painter->scale(1.0, -1.0);
+                    painter->drawText(QRectF(-stampRect.width() * 0.5, -stampRect.height() * 0.5, stampRect.width(), stampRect.height()),
+                                      Qt::AlignLeft | Qt::AlignTop, stampLines.join('\n'));
+                    painter->restore();
+                    boundingRect = boundingRect.united(stampRect);
+                }
+
+                pdf::PDFContentStreamBuilder::ContentStream contentStream = contentBuilder.end(painter);
                 std::vector<pdf::PDFObject> copiedObjects = builder.copyFrom({ contentStream.resources, contentStream.contents }, contentStream.document.getStorage(), true);
                 Q_ASSERT(copiedObjects.size() == 2);
 

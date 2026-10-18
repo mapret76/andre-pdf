@@ -32,7 +32,7 @@ Viewer, PageMaster, DocDiff and the `PdfTool` CLI.
 | # | Requirement | Where it lands |
 | --- | --- | --- |
 | 1 | Installs on the Windows desktop | Phase 1 (done: MSI from CI) |
-| 2 | OCR, then edit text **in the original font** | Phase 6 (font-matched), Phase 7 (synthesised scan font — an open ClearScan) |
+| 2 | OCR, then edit text **in the original font**: identify the font in depth, check it is installed, else prompt + find/download/install it (free fonts) or point to a licence / metric-compatible substitute (commercial) | Phase 6 (font-matched, design in ledger "Phase 6 design notes"), Phase 7 (synthesised scan font — an open ClearScan) |
 | 3 | Add images, text boxes, signatures — saved | Exists in PDF4QT Editor plugin |
 | 4 | Digitally sign with his personal certificate (selectable), visible box that lets a reader verify | Phase 2 (QR + signer + hash stamp) |
 | 5 | Lock the PDF afterwards | Phase 2 (DocMDP certification + optional encryption) |
@@ -133,7 +133,7 @@ tool is reported as a violation.
 | 3 | Contract packs: signature library, initial all pages, find + sign lines, lock when complete, split, batch | 5–6 wks | 3-contract pack splits, signs and locks in one go |
 | 4 | Review tools: comments polish, size reduction, Word/Excel export, Share, redline compare | 6–8 wks | Round trip on a pack |
 | 5 | Android: 2-wk proof of concept (Pdf4QtLibCore on arm64, sign with .pfx), then Qt Quick UI; KeyChain later | 4–6 months | Phone-signed file certified in Reader on PC |
-| 6 | Font-matched editing of OCR'd scans | 2–3 wks | 20 scans, edits unnoticed at 100% |
+| 6 | Font-matched editing of OCR'd scans + font identify / install-check / download | 4–5 wks | 20 scans: right family for ≥16, edits unnoticed at 100% |
 | 7 | Scan-font engine (jbig2enc clustering + libautotrace + fontTools) | 6–10 wks | Zero 6/8, l/1 swaps |
 
 Total ~12–13 months for one developer (~8 with a second on Android). Contract
@@ -155,6 +155,7 @@ commercial), MAUI, Tauri.
 - The repo is **public**: never commit secrets, certificates, .pfx files, real
   contracts or client documents. Test PDFs are synthetic.
 - Do not use the "ClearScan" trade mark for our feature.
+- Fonts: only download fonts with a free licence (OFL/Apache, e.g. Google Fonts). Never fetch a commercial font from a mirror. Font identification runs locally, so contract images never go to online font identifiers unless the user opts in each time.
 - Licences: stay on MIT/BSD/Apache/LGPL/MPL components for anything that might be
   distributed. GPL (KillerPDF, Potrace) and AGPL (MuPDF, iText, pdf2docx's PyMuPDF
   base) only for internal-only use or with a deliberate decision.
