@@ -49,6 +49,8 @@ add_library(Pdf4QtLibCore SHARED
     sources/pdfdocumentmanipulator.h
     sources/pdfdocumentsigner.cpp
     sources/pdfdocumentsigner.h
+    sources/pdfpageinitials.cpp
+    sources/pdfpageinitials.h
     sources/pdfsignaturelibrary.cpp
     sources/pdfsignaturelibrary.h
     sources/pdfsignaturestamp.cpp

@@ -23,5 +23,6 @@
         <file>signature-slot-3.svg</file>
         <file>signature-slot-4.svg</file>
         <file>signature-library.svg</file>
+        <file>initial-pages.svg</file>
     </qresource>
 </RCC>

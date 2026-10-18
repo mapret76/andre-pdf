@@ -33,11 +33,14 @@
 #include "pdfsignaturelibrary.h"
 #include "signdialog.h"
 #include "signaturelibrarydialog.h"
+#include "initialsdialog.h"
 
 #include <QtTest>
 #include <QLineEdit>
 #include <QCheckBox>
 #include <QSlider>
+#include <QTimer>
+#include <QSettings>
 #include <QComboBox>
 #include <QPainter>
 
@@ -52,6 +55,7 @@ private slots:
     void dialogLockAndEncryption();
     void signatureLibraryDialogs();
     void signatureImageKeepsTransparency();
+    void initialsDialog();
     void rendering_data();
     void rendering();
     void fallback_data();
@@ -424,6 +428,39 @@ void SignatureAppearanceTest::signatureImageKeepsTransparency()
         }
     }
     QVERIFY(hasImageWithMask);
+}
+
+void SignatureAppearanceTest::initialsDialog()
+{
+    QCoreApplication::setOrganizationName("PDF4QT-Tests");
+    QCoreApplication::setApplicationName("InitialsDialog");
+    QSettings().clear();
+
+    pdf::PDFSignatureLibrary library;
+    QImage image(10, 10, QImage::Format_ARGB32);
+    image.fill(Qt::black);
+    library.setSlot(3, { QStringLiteral("AP"), pdf::PDFSignatureLibrary::toPng(image) });
+
+    pdfplugin::InitialsDialog dialog(nullptr, library, 6);
+    auto* slotCombo = dialog.findChildren<QComboBox*>().value(0);
+    QVERIFY(slotCombo);
+    QCOMPARE(slotCombo->count(), 1);    // only the filled slots
+    QCOMPARE(dialog.getSlotIndex(), 3);
+
+    auto* skipPages = dialog.findChild<QLineEdit*>();
+    QVERIFY(skipPages);
+    skipPages->setText(QStringLiteral("1, 3-4"));
+    dialog.accept();
+    QCOMPARE(dialog.result(), int(QDialog::Accepted));
+    QCOMPARE(dialog.getSettings().skippedPages, (std::set<pdf::PDFInteger>{ 0, 2, 3, 5 })); // last page skipped by default
+    QVERIFY(qAbs(dialog.getSettings().width - 56.0) < 1.0);  // 20 mm
+
+    // A wrong page range keeps the dialog open
+    pdfplugin::InitialsDialog wrong(nullptr, library, 6);
+    wrong.findChild<QLineEdit*>()->setText(QStringLiteral("9"));
+    QTimer::singleShot(0, []() { if (QWidget* box = QApplication::activeModalWidget()) { box->close(); } });
+    wrong.accept();
+    QVERIFY(wrong.result() != int(QDialog::Accepted));
 }
 
 QTEST_MAIN(SignatureAppearanceTest)

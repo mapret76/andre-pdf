@@ -36,7 +36,7 @@ Queue:
 - [x] A3 Phase 2.5: one "Sign & Lock" action (optional encrypt -> certify -> re-open -> verify)
 - [x] A4 Rebrand to "Andre PDF" (window titles, About, installer product name; internal settings ids kept)
 - [x] A5 Phase 3.1: signature library - 4 slots, import from a scanned image (background removed), DPAPI-protected on Windows
-- [ ] A6 Phase 3.2: initial every page (chosen slot, position, skip pages)
+- [x] A6 Phase 3.2: initial every page (chosen slot, position, skip pages)
 - [ ] A7 Phase 3.3: find signature lines (existing fields, "Signature"/"Signed" labels, underscores), sign several, checklist; Lock disabled until all are signed; the last one locks (field /Lock /P)
 - [ ] A8 Phase 3.4: split a contract pack (by bookmarks / page ranges / detected first pages) + batch initial-sign-lock
 - [ ] A9 Phase 4.1: size reduction before signing (on PDFOptimizer + image optimizer), blocked after the first signature
@@ -326,3 +326,18 @@ upstream author's machine, not ours).
 - Tests: `signatureLibrary`, `signatureExtraction` (noisy and clean scans),
   `signatureLibraryDialogs`, `signatureImageKeepsTransparency` (the PNG reaches the PDF
   with its mask, so it does not cover the signature line).
+
+### 2026-10-18 (night) - autopilot: A6 initial every page
+- `PDFPageInitials` (core): position on the page as displayed (bottom right/centre/left,
+  top right/left), honouring `/Rotate`; width and margin in points; skipped pages; draws
+  into the page content. Test `initialsOnEveryPage` renders an upright and a rotated
+  page and checks the pixels.
+- **Upstream bug fixed** in `PDFPageContentStreamBuilder::end` (place before/after): a
+  page without its own `/Resources` lost the resources of the new content (a null object
+  was merged over them), and a page inheriting `/Resources` from the page tree lost them
+  for its old content. Now the inherited resources are looked up and only a dictionary
+  is merged. This also fixes "Sign Electronically" on such pages. Worth offering
+  upstream as a pull request.
+- Plugin: "Initial All Pages..." (choose the slot, position, width/margin in mm, skip the
+  last page by default, skip a page list), refused on an already signed document.
+  Test `initialsDialog`.

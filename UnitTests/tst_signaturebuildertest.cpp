@@ -30,6 +30,12 @@
 #include "pdfocrapplyprocessor.h"
 #include "pdfsignaturestamp.h"
 #include "pdfsignaturelibrary.h"
+#include "pdfpageinitials.h"
+#include "pdfrenderer.h"
+#include "pdfcms.h"
+#include "pdffont.h"
+#include "pdfcolorspaces.h"
+#include "pdfoptionalcontent.h"
 #include "pdfsecurityhandler.h"
 
 #include <QtTest>
@@ -103,6 +109,7 @@ private slots:
     void encryptedCertification();
     void signatureLibrary();
     void signatureExtraction();
+    void initialsOnEveryPage();
 
 private:
     static bool createTestCertificate(const QTemporaryDir& directory, PDFCertificateEntry& certificate, QString& password);
@@ -967,6 +974,103 @@ void SignatureBuilderTest::signatureExtraction()
     const QImage cleanSignature = PDFSignatureLibrary::extractSignature(clean);
     QVERIFY(!cleanSignature.isNull());
     QCOMPARE(qAlpha(cleanSignature.pixel(cleanSignature.width() / 2, cleanSignature.height() / 2)), 255);
+}
+
+void SignatureBuilderTest::initialsOnEveryPage()
+{
+    // Page 0 upright, page 1 turned by /Rotate 90, page 2 skipped
+    PDFDocumentBuilder builder;
+    builder.appendPage(QRectF(0, 0, 300, 400));
+    const PDFObjectReference rotated = builder.appendPage(QRectF(0, 0, 300, 400));
+    builder.setPageRotation(rotated, PageRotation::Rotate90);
+    builder.appendPage(QRectF(0, 0, 300, 400));
+    const PDFDocument document = builder.build();
+
+    QImage initials(100, 50, QImage::Format_ARGB32);
+    initials.fill(Qt::red);
+
+    PDFPageInitials::Settings settings;
+    settings.width = 60;
+    settings.margin = 20;
+    settings.skippedPages = { 2 };
+
+    // Rectangle in the displayed page: bottom right corner, the height follows the image
+    const QRectF upright = PDFPageInitials::getDisplayRectangle(document.getCatalog()->getPage(0), initials.size(), settings);
+    QCOMPARE(upright, QRectF(220, 20, 60, 30));
+    const QRectF turned = PDFPageInitials::getDisplayRectangle(document.getCatalog()->getPage(1), initials.size(), settings);
+    QCOMPARE(turned, QRectF(320, 20, 60, 30));
+
+    const PDFDocumentPointer initialed = PDFPageInitials::apply(&document, initials, settings);
+    QVERIFY(initialed);
+
+    // Rendered as the reader sees the pages (y down in the image), the red block is
+    // at the bottom right corner of each initialed page and absent on the skipped one
+    auto render = [&](PDFInteger pageIndex, QSize size)
+    {
+        PDFCMSGeneric cms;
+        PDFFontCache fontCache(32, 32);
+        PDFICCProfileCache iccProfileCache;
+        PDFOptionalContentActivity activity(initialed.get(), OCUsage::View, nullptr);
+        fontCache.setDocument(PDFModifiedDocument(initialed.get(), &activity));
+        iccProfileCache.setDocument(PDFModifiedDocument(initialed.get(), &activity));
+        PDFRenderer renderer(initialed.get(), &fontCache, &iccProfileCache, &cms, &activity, PDFRenderer::Features(), PDFMeshQualitySettings());
+        QImage image(size, QImage::Format_RGB888);
+        image.fill(Qt::white);
+        QPainter painter(&image);
+        renderer.render(&painter, QRectF(QPointF(0, 0), size), pageIndex);
+        painter.end();
+        return image;
+    };
+    auto isRed = [](QColor color) { return color.red() > 200 && color.green() < 60 && color.blue() < 60; };
+
+    const QImage page0 = render(0, QSize(300, 400));
+    QVERIFY(isRed(page0.pixelColor(250, 400 - 35)));    // inside the block
+    QVERIFY(!isRed(page0.pixelColor(250, 400 - 60)));   // above it
+    QVERIFY(!isRed(page0.pixelColor(50, 400 - 35)));    // bottom left stays empty
+
+    const QImage page1 = render(1, QSize(400, 300));
+    QVERIFY(isRed(page1.pixelColor(350, 300 - 35)));
+    QVERIFY(!isRed(page1.pixelColor(350, 300 - 60)));
+    QVERIFY(!isRed(page1.pixelColor(50, 300 - 35)));
+
+    const QImage page2 = render(2, QSize(300, 400));
+    QVERIFY(!isRed(page2.pixelColor(250, 400 - 35)));
+
+    // Every page skipped: nothing to change
+    settings.skippedPages = { 0, 1, 2 };
+    QVERIFY(!PDFPageInitials::apply(&document, initials, settings));
+
+    // Resources inherited from the page tree stay available to the old content
+    PDFDocumentBuilder inheritedBuilder;
+    inheritedBuilder.appendPage(QRectF(0, 0, 300, 400));
+    const PDFDocument plain = inheritedBuilder.build();
+    const PDFObjectReference pagesReference = plain.getCatalog()->getPage(0)->getPageReference();
+    const PDFObject pageObject = plain.getObjectByReference(pagesReference);
+    const PDFObjectReference parentReference = pageObject.getDictionary()->get("Parent").getReference();
+    PDFObjectFactory resources;
+    resources.beginDictionary();
+    resources.beginDictionaryItem("Resources");
+    resources.beginDictionary();
+    resources.beginDictionaryItem("Font");
+    resources.beginDictionary();
+    resources.beginDictionaryItem("F9");
+    resources << WrapName("Inherited");
+    resources.endDictionaryItem();
+    resources.endDictionary();
+    resources.endDictionaryItem();
+    resources.endDictionary();
+    resources.endDictionaryItem();
+    resources.endDictionary();
+    inheritedBuilder.mergeTo(parentReference, resources.takeObject());
+    const PDFDocument inherited = inheritedBuilder.build();
+    settings.skippedPages.clear();
+    const PDFDocumentPointer inheritedInitialed = PDFPageInitials::apply(&inherited, initials, settings);
+    QVERIFY(inheritedInitialed);
+    const PDFDictionary* pageResources = inheritedInitialed->getDictionaryFromObject(inheritedInitialed->getObject(inheritedInitialed->getCatalog()->getPage(0)->getResources()));
+    QVERIFY(pageResources);
+    const PDFDictionary* fonts = inheritedInitialed->getDictionaryFromObject(inheritedInitialed->getObject(pageResources->get("Font")));
+    QVERIFY(fonts && fonts->hasKey("F9"));
+    QVERIFY(pageResources->hasKey("XObject"));
 }
 
 QTEST_MAIN(SignatureBuilderTest)

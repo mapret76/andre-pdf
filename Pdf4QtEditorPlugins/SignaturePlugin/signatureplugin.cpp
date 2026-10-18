@@ -31,6 +31,8 @@
 #include "pdfdocumentsigner.h"
 #include "pdfsignaturestamp.h"
 #include "signaturelibrarydialog.h"
+#include "initialsdialog.h"
+#include "pdfpageinitials.h"
 
 #include <QBuffer>
 #include <QAction>
@@ -84,6 +86,9 @@ void SignaturePlugin::setWidget(pdf::PDFWidget* widget)
     QAction* signatureLibraryAction = new QAction(QIcon(":/pdfplugins/signatureplugin/signature-library.svg"), tr("Signature &Library..."), this);
     signatureLibraryAction->setObjectName("signaturetool_signatureLibraryAction");
     m_actions[SignatureLibrary] = signatureLibraryAction;
+    QAction* initialPagesAction = new QAction(QIcon(":/pdfplugins/signatureplugin/initial-pages.svg"), tr("&Initial All Pages..."), this);
+    initialPagesAction->setObjectName("signaturetool_initialPagesAction");
+    m_actions[InitialPages] = initialPagesAction;
     QAction* clearAction = new QAction(QIcon(":/pdfplugins/signatureplugin/clear.svg"), tr("Clear All &Graphics"), this);
     QAction* signElectronicallyAction = new QAction(QIcon(":/pdfplugins/signatureplugin/sign-electronically.svg"), tr("Sign &Electronically"), this);
     QAction* signDigitallyAction = new QAction(QIcon(":/pdfplugins/signatureplugin/sign-digitally.svg"), tr("Sign Digitally &With Certificate"), this);
@@ -194,6 +199,7 @@ void SignaturePlugin::setWidget(pdf::PDFWidget* widget)
     connect(signDigitallyAction, &QAction::triggered, this, &SignaturePlugin::onSignDigitally);
     connect(certificatesAction, &QAction::triggered, this, &SignaturePlugin::onOpenCertificatesManager);
     connect(signatureLibraryAction, &QAction::triggered, this, &SignaturePlugin::onOpenSignatureLibrary);
+    connect(initialPagesAction, &QAction::triggered, this, &SignaturePlugin::onInitialPages);
     connect(m_widget, &pdf::PDFWidget::sceneActivityChanged, this, &SignaturePlugin::onSceneActivityChanged);
 
     updateActions();
@@ -219,6 +225,7 @@ std::vector<QAction*> SignaturePlugin::getActions() const
     result.push_back(m_actions[SignDigitally]);
     result.push_back(m_actions[Certificates]);
     result.push_back(m_actions[SignatureLibrary]);
+    result.push_back(m_actions[InitialPages]);
 
     return result;
 }
@@ -667,6 +674,36 @@ void SignaturePlugin::onOpenSignatureLibrary()
     updateActions();
 }
 
+void SignaturePlugin::onInitialPages()
+{
+    Q_ASSERT(m_document);
+
+    if (pdf::PDFDocumentSigner::hasExistingSignatures(m_document))
+    {
+        QMessageBox::critical(m_widget, tr("Initial All Pages"), tr("The document is already signed. Initialling the pages now would break the signatures - initial before signing."));
+        return;
+    }
+
+    InitialsDialog dialog(m_dataExchangeInterface->getMainWindow(), m_signatureLibrary, pdf::PDFInteger(m_document->getCatalog()->getPageCount()));
+    if (dialog.exec() != QDialog::Accepted)
+    {
+        return;
+    }
+
+    QImage initials;
+    initials.loadFromData(m_signatureLibrary.getSlot(dialog.getSlotIndex()).png, "PNG");
+    pdf::PDFDocumentPointer document = pdf::PDFPageInitials::apply(m_document, initials, dialog.getSettings());
+    if (!document)
+    {
+        QMessageBox::information(m_widget, tr("Initial All Pages"), tr("No page was initialled."));
+        return;
+    }
+
+    pdf::PDFModifiedDocument::ModificationFlags flags;
+    flags.setFlag(pdf::PDFModifiedDocument::PageContents);
+    Q_EMIT m_widget->getToolManager()->documentModified(pdf::PDFModifiedDocument(document, nullptr, flags));
+}
+
 void SignaturePlugin::updateSignatureSlots()
 {
     for (int i = 0; i < pdf::PDFSignatureLibrary::SLOT_COUNT; ++i)
@@ -807,6 +844,7 @@ void SignaturePlugin::updateActions()
         }
 
         m_actions[SignDigitally]->setEnabled(m_document && m_widget && !m_widget->isAnySceneActive(&m_scene));
+        m_actions[InitialPages]->setEnabled(m_document && m_widget && !m_widget->isAnySceneActive(&m_scene));
         return;
     }
 
@@ -824,6 +862,7 @@ void SignaturePlugin::updateActions()
         m_actions[SignatureSlot1 + i]->setEnabled(!m_signatureLibrary.getSlot(i).isEmpty());
     }
     m_actions[SignatureLibrary]->setEnabled(true);
+    m_actions[InitialPages]->setEnabled(m_document);
 
     // Clear action
     QAction* clearAction = m_actions[Clear];

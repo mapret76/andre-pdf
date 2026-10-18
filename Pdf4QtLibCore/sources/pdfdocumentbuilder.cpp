@@ -1332,10 +1332,28 @@ void PDFPageContentStreamBuilder::end(QPainter* painter)
                 }
             }
 
+            // Resources are inheritable (ISO 32000-2, 7.7.3.4): the old content uses the
+            // resources of the nearest ancestor, which has them, when the page has none.
+            // The new page resources replace the inherited ones, so they must carry them.
             PDFObject oldResourcesObject = m_documentBuilder->getObject(pageDictionary->get("Resources"));
-            oldResourcesObject = removeDictionaryReferencesFromResources(oldResourcesObject);
-            replaceResources(contentsReference, resourcesReference, oldResourcesObject);
-            m_documentBuilder->mergeTo(resourcesReference, oldResourcesObject);
+            const PDFDictionary* ancestorDictionary = pageDictionary;
+            for (int depth = 0; oldResourcesObject.isNull() && ancestorDictionary && depth < 64; ++depth)
+            {
+                ancestorDictionary = m_documentBuilder->getDictionaryFromObject(m_documentBuilder->getObject(ancestorDictionary->get("Parent")));
+                if (ancestorDictionary)
+                {
+                    oldResourcesObject = m_documentBuilder->getObject(ancestorDictionary->get("Resources"));
+                }
+            }
+
+            // A page without any resources has nothing to merge, merging the null
+            // object would erase the resources of the new content
+            if (oldResourcesObject.isDictionary())
+            {
+                oldResourcesObject = removeDictionaryReferencesFromResources(oldResourcesObject);
+                replaceResources(contentsReference, resourcesReference, oldResourcesObject);
+                m_documentBuilder->mergeTo(resourcesReference, oldResourcesObject);
+            }
         }
 
         switch (m_mode)

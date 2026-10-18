@@ -65,6 +65,7 @@ private:
     void onOpenCertificatesManager();
     void onSceneActivityChanged();
     void onOpenSignatureLibrary();
+    void onInitialPages();
 
     void onPenChanged(const QPen& pen);
     void onBrushChanged(const QBrush& brush);
@@ -95,6 +96,7 @@ private:
         SignatureSlot3,
         SignatureSlot4,
         SignatureLibrary,
+        InitialPages,
         Clear,
 
         // Sign actions
