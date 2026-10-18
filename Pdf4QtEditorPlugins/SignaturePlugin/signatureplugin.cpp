@@ -29,15 +29,16 @@
 #include "pdfcertificatemanagerdialog.h"
 #include "signdialog.h"
 #include "pdfdocumentsigner.h"
+#include "pdfsignaturestamp.h"
 
 #include <QBuffer>
-#include <QFont>
 #include <QAction>
 #include <QApplication>
 #include <QToolButton>
 #include <QMainWindow>
 #include <QMessageBox>
 #include <QFileDialog>
+#include <QDir>
 
 namespace pdfplugin
 {
@@ -387,30 +388,7 @@ void SignaturePlugin::onSignDigitally()
         parameters.document = m_document;
         parameters.progress = m_widget->getDrawWidgetProxy()->getProgress();
         parameters.certification = dialog.getCertification();
-
-        // Text of the verification stamp drawn under the visible signature. It says
-        // who signed, when and how the document is locked; the proof itself is the
-        // digital signature, which the reader verifies in the signature panel.
-        QStringList stampLines;
-        if (visibleSignature)
-        {
-            stampLines << tr("Electronically signed by %1").arg(certificate->info.getName(pdf::PDFCertificateInfo::CommonName));
-            stampLines << parameters.signingTime.toString("yyyy-MM-dd HH:mm:ss t");
-            switch (parameters.certification)
-            {
-                case pdf::PDFDocumentSigner::Certification::NoChanges:
-                    stampLines << tr("Certified: no changes allowed");
-                    break;
-                case pdf::PDFDocumentSigner::Certification::FormFilling:
-                    stampLines << tr("Certified: form filling and signing allowed");
-                    break;
-                case pdf::PDFDocumentSigner::Certification::FormFillingAndAnnotations:
-                    stampLines << tr("Certified: form filling, signing and comments allowed");
-                    break;
-                case pdf::PDFDocumentSigner::Certification::None:
-                    break;
-            }
-        }
+        parameters.encryptionUserPassword = dialog.getEncryptionPassword();
 
         if (isDocumentTimestamp)
         {
@@ -426,6 +404,16 @@ void SignaturePlugin::onSignDigitally()
         {
             parameters.originalDocumentData = originalFile.readAll();
             originalFile.close();
+        }
+
+        // Verification stamp drawn under the visible signature: who signed, when, how
+        // the document is locked, and the fingerprints of the certificate and of the
+        // file before this signature, also as a QR code. The proof itself is the
+        // digital signature, which the reader verifies in the signature panel.
+        std::optional<pdf::PDFSignatureStamp::Data> stamp;
+        if (visibleSignature)
+        {
+            stamp = pdf::PDFSignatureStamp::create(certificate->info, parameters.signingTime, parameters.certification, parameters.originalDocumentData);
         }
 
         pdf::PDFSignatureFactory::TimestampSettings timestampSettings;
@@ -493,23 +481,16 @@ void SignaturePlugin::onSignDigitally()
 
                 // The stamp is placed under the signature graphics (PDF coordinates, y goes up)
                 QRectF boundingRect = m_scene.getBoundingBox(pageIndex, true);
-                if (!stampLines.isEmpty())
+                if (stamp)
                 {
-                    constexpr qreal fontSize = 7.0;
-                    constexpr qreal lineHeight = 9.0;
-                    const qreal stampHeight = lineHeight * stampLines.size() + 2.0;
-                    const QRectF stampRect(boundingRect.left(), boundingRect.top() - stampHeight, qMax(boundingRect.width(), 200.0), stampHeight);
-
-                    QFont font("Arial");
-                    font.setPixelSize(qRound(fontSize));
-                    painter->save();
-                    painter->setFont(font);
-                    painter->setPen(QColor(0, 0, 128));
-                    painter->translate(stampRect.center());
-                    painter->scale(1.0, -1.0);
-                    painter->drawText(QRectF(-stampRect.width() * 0.5, -stampRect.height() * 0.5, stampRect.width(), stampRect.height()),
-                                      Qt::AlignLeft | Qt::AlignTop, stampLines.join('\n'));
-                    painter->restore();
+                    const QSizeF stampSize = pdf::PDFSignatureStamp::getSize(*stamp);
+                    QRectF stampRect(boundingRect.left(), boundingRect.top() - stampSize.height(), stampSize.width(), stampSize.height());
+                    if (stampRect.top() < page->getMediaBox().top())
+                    {
+                        // No room under the graphics, the stamp goes above them
+                        stampRect.moveTop(boundingRect.bottom());
+                    }
+                    pdf::PDFSignatureStamp::draw(painter, stampRect, *stamp);
                     boundingRect = boundingRect.united(stampRect);
                 }
 
@@ -584,6 +565,7 @@ void SignaturePlugin::onSignDigitally()
             {
                 signedFile.write(signedDocument);
                 signedFile.close();
+                checkSavedFile(fileName, signatureName, parameters.encryptionUserPassword.value_or(QString()), isDocumentTimestamp);
             }
             else
             {
@@ -591,6 +573,52 @@ void SignaturePlugin::onSignDigitally()
             }
         }
     }
+}
+
+void SignaturePlugin::checkSavedFile(const QString& fileName, const QString& signatureName, const QString& password, bool isDocumentTimestamp)
+{
+    // The file is read back from the disk, as a reader will get it, so that what is
+    // reported is what was really saved
+    QFile file(fileName);
+    QByteArray data;
+    if (file.open(QFile::ReadOnly))
+    {
+        data = file.readAll();
+        file.close();
+    }
+
+    const pdf::PDFDocumentSigner::SignedFileCheck check = pdf::PDFDocumentSigner::checkSignedFile(data, signatureName, password);
+    if (!check.isOK())
+    {
+        QString message = tr("The saved file %1 did not pass the check after saving: ").arg(QDir::toNativeSeparators(fileName));
+        if (!check.isOpened)
+        {
+            message += tr("it cannot be opened.");
+        }
+        else if (!check.isSignatureFound)
+        {
+            message += tr("the signature was not found.");
+        }
+        else
+        {
+            message += tr("the signature is not valid.\n%1").arg(check.errors.join('\n'));
+        }
+        QMessageBox::critical(m_widget, tr("Signed Document Check"), message);
+        return;
+    }
+
+    QStringList lines;
+    lines << (isDocumentTimestamp ? tr("The document timestamp was saved and checked:") : tr("The document was signed, saved and checked:"));
+    lines << tr("- the signature is valid and covers the whole file");
+    const QString certificationText = pdf::PDFSignatureStamp::getCertificationText(check.certification);
+    lines << (certificationText.isEmpty() ? tr("- the document is not locked (approval signature)") : tr("- %1").arg(certificationText));
+    if (check.isEncrypted)
+    {
+        lines << tr("- the document is encrypted, the password is needed to open it");
+    }
+    lines << QString();
+    lines << tr("Readers check the signature in their signature panel. Trust in the certificate is their decision.");
+    QMessageBox::information(m_widget, tr("Signed Document Check"), lines.join('\n'));
 }
 
 QString SignaturePlugin::getSignedFileName() const

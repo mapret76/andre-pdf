@@ -557,6 +557,25 @@ if(PDF4QT_INSTALL_DEPENDENCIES AND NOT PDF4QT_BUILD_ONLY_CORE_LIBRARY)
     endif()
 endif()
 
+if(NOT PDF4QT_BUILD_ONLY_CORE_LIBRARY)
+    # Credits and licence texts of everything the program is built from (THIRD-PARTY-NOTICES.md).
+    # On Windows next to the programs, where the About dialog looks first.
+    if(WIN32)
+        set(PDF4QT_NOTICES_DIR ${PDF4QT_INSTALL_BIN_DIR})
+    else()
+        set(PDF4QT_NOTICES_DIR ${PDF4QT_INSTALL_SHARE_DIR}/doc/pdf4qt)
+    endif()
+    set(PDF4QT_NOTICES_VCPKG_SHARE_DIR "")
+    if(VCPKG_INSTALLED_DIR AND VCPKG_TARGET_TRIPLET)
+        set(PDF4QT_NOTICES_VCPKG_SHARE_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share")
+    endif()
+    install(CODE "execute_process(COMMAND \"${CMAKE_COMMAND}\"
+        \"-DNOTICES_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}\"
+        \"-DNOTICES_VCPKG_SHARE_DIR=${PDF4QT_NOTICES_VCPKG_SHARE_DIR}\"
+        \"-DNOTICES_OUTPUT=\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${PDF4QT_NOTICES_DIR}/THIRD-PARTY-NOTICES.txt\"
+        -P \"${CMAKE_CURRENT_SOURCE_DIR}/cmake/AssembleThirdPartyNotices.cmake\" COMMAND_ERROR_IS_FATAL ANY)")
+endif()
+
 #macro(dump_variables)
 #    message(STATUS "dump_variables------------------------------------------{")
 #    get_cmake_property(_variableNames VARIABLES)

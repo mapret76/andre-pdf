@@ -35,6 +35,7 @@
 #include <openjpeg.h>
 #include <openssl/opensslv.h>
 #include <zlib.h>
+#include <clipper2/clipper.version.h>
 
 #ifdef Q_OS_WIN
 #define WIN32_LEAN_AND_MEAN
@@ -362,6 +363,52 @@ std::vector<PDFDependentLibraryInfo> PDFDependentLibraryInfo::getLibraryInfo()
     blend2dInfo.version = QString("%1.%2.%3").arg(blend2dMajor).arg(blend2dMinor).arg(blend2dPatch);
     blend2dInfo.url = tr("https://blend2d.com/");
     result.emplace_back(qMove(blend2dInfo));
+
+    // Clipper2
+    PDFDependentLibraryInfo clipperInfo;
+    clipperInfo.library = tr("Clipper2");
+    clipperInfo.license = tr("BSL-1.0");
+    clipperInfo.version = QString::fromLatin1(CLIPPER2_VERSION);
+    clipperInfo.url = tr("https://github.com/AngusJohnson/Clipper2");
+    result.emplace_back(qMove(clipperInfo));
+
+    // Libraries without a version query: oneTBB, libpng and, in the Windows
+    // installer, the libraries vcpkg brings in for the ones above and for the
+    // OCR engine. Their licence texts are in THIRD-PARTY-NOTICES.txt.
+    struct LibraryWithoutVersion
+    {
+        const char* library;
+        const char* license;
+        const char* url;
+    };
+    static constexpr LibraryWithoutVersion librariesWithoutVersion[] = {
+        { "oneTBB", "Apache-2.0", "https://github.com/uxlfoundation/oneTBB" },
+        { "libpng", "PNG Reference Library License v2", "http://www.libpng.org/pub/png/libpng.html" },
+        { "QR Code generator library (Project Nayuki)", "MIT", "https://github.com/nayuki/QR-Code-generator" },
+#ifdef Q_OS_WIN
+        { "AsmJit", "zlib", "https://asmjit.com/" },
+        { "hwloc", "BSD-3-Clause", "https://www.open-mpi.org/projects/hwloc/" },
+        { "libspng", "BSD-2-Clause", "https://libspng.org/" },
+        { "libtiff", "libtiff (BSD-style)", "https://libtiff.gitlab.io/libtiff/" },
+        { "giflib", "MIT", "https://giflib.sourceforge.net/" },
+        { "libwebp", "BSD-3-Clause", "https://chromium.googlesource.com/webm/libwebp" },
+        { "libarchive", "BSD-2-Clause", "https://libarchive.org/" },
+        { "curl", "curl (MIT-style)", "https://curl.se/" },
+        { "Brotli", "MIT", "https://github.com/google/brotli" },
+        { "bzip2", "bzip2 (BSD-style)", "https://sourceware.org/bzip2/" },
+        { "XZ Utils (liblzma)", "0BSD", "https://tukaani.org/xz/" },
+        { "LZ4", "BSD-2-Clause", "https://lz4.org/" },
+        { "Zstandard", "BSD-3-Clause", "https://facebook.github.io/zstd/" },
+#endif
+    };
+    for (const LibraryWithoutVersion& library : librariesWithoutVersion)
+    {
+        PDFDependentLibraryInfo info;
+        info.library = QString::fromLatin1(library.library);
+        info.license = QString::fromLatin1(library.license);
+        info.url = QString::fromLatin1(library.url);
+        result.emplace_back(qMove(info));
+    }
 
     return result;
 }

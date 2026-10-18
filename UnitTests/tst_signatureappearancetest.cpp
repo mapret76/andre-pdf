@@ -32,6 +32,8 @@
 #include "signdialog.h"
 
 #include <QtTest>
+#include <QLineEdit>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QPainter>
 
@@ -43,6 +45,7 @@ class SignatureAppearanceTest : public QObject
 private slots:
     void strokeBounds();
     void dialogMethods();
+    void dialogLockAndEncryption();
     void rendering_data();
     void rendering();
     void fallback_data();
@@ -295,6 +298,45 @@ void SignatureAppearanceTest::fallback()
     Fixture fixture(builder.build(), verified, false);
     QVERIFY(fixture.forms.getFormFieldForWidget(field));
     QCOMPARE(fixture.forms.isEditorDrawEnabled(field), verified && (emptyRect || appearanceKind < 2));
+}
+
+void SignatureAppearanceTest::dialogLockAndEncryption()
+{
+    // A document without signatures: certified "no changes" by default, encryption off
+    {
+        pdfplugin::SignDialog dialog(nullptr, false, true);
+        auto* certification = dialog.findChild<QComboBox*>("certificationCombo");
+        auto* encrypt = dialog.findChild<QCheckBox*>("encryptCheckBox");
+        auto* password = dialog.findChild<QLineEdit*>("openPasswordEdit");
+        QVERIFY(certification && encrypt && password);
+        QVERIFY(certification->isEnabled());
+        QCOMPARE(certification->count(), 4);
+        QVERIFY(!dialog.getEncryptionPassword());
+        QVERIFY(!password->isEnabled());
+
+        encrypt->setChecked(true);
+        QVERIFY(password->isEnabled());
+        password->setText(QStringLiteral("secret"));
+        QCOMPARE(dialog.getEncryptionPassword().value_or(QString()), QStringLiteral("secret"));
+
+        certification->setCurrentIndex(certification->count() - 1);
+        QCOMPARE(dialog.getCertification(), pdf::PDFDocumentSigner::Certification::None);
+        certification->setCurrentIndex(0);
+        QCOMPARE(dialog.getCertification(), pdf::PDFDocumentSigner::Certification::NoChanges);
+    }
+
+    // An already signed document can be neither certified nor encrypted
+    {
+        pdfplugin::SignDialog dialog(nullptr, false, false);
+        auto* certification = dialog.findChild<QComboBox*>("certificationCombo");
+        auto* encrypt = dialog.findChild<QCheckBox*>("encryptCheckBox");
+        QVERIFY(certification && encrypt);
+        QVERIFY(!certification->isEnabled());
+        QVERIFY(!encrypt->isEnabled());
+        encrypt->setChecked(true);
+        QCOMPARE(dialog.getCertification(), pdf::PDFDocumentSigner::Certification::None);
+        QVERIFY(!dialog.getEncryptionPassword());
+    }
 }
 
 QTEST_MAIN(SignatureAppearanceTest)

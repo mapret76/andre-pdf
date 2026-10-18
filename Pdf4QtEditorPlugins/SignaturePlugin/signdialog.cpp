@@ -26,6 +26,7 @@
 #include "pdfcertificatemanager.h"
 #include "pdfcertificatelisthelper.h"
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QMessageBox>
 #include <QSettings>
@@ -95,6 +96,9 @@ SignDialog::SignDialog(QWidget* parent, bool isSceneEmpty, bool canCertify) :
     loadSettings();
 
     connect(ui->signatureTypeCombo, &QComboBox::currentIndexChanged, this, &SignDialog::updateUi);
+    connect(ui->encryptCheckBox, &QCheckBox::toggled, this, &SignDialog::updateUi);
+    ui->encryptCheckBox->setToolTip(m_canCertify ? tr("The document is encrypted with AES-256 before it is signed, so encryption never breaks the signature.")
+                                                 : tr("The document is already signed, encrypting it would break the signatures."));
     updateUi();
 }
 
@@ -143,6 +147,16 @@ pdf::PDFDocumentSigner::Certification SignDialog::getCertification() const
     return static_cast<pdf::PDFDocumentSigner::Certification>(ui->certificationCombo->currentData().toInt());
 }
 
+std::optional<QString> SignDialog::getEncryptionPassword() const
+{
+    if (!m_canCertify || getSignatureType() == TimestampOnly || !ui->encryptCheckBox->isChecked())
+    {
+        return std::nullopt;
+    }
+
+    return ui->openPasswordEdit->text();
+}
+
 const pdf::PDFCertificateEntry* SignDialog::getCertificate() const
 {
     const int index = ui->certificateCombo->currentIndex();
@@ -177,6 +191,23 @@ void SignDialog::accept()
         {
             QMessageBox::critical(this, tr("Error"), tr("Password to open certificate is invalid."));
             ui->certificatePasswordEdit->setFocus();
+            return;
+        }
+    }
+
+    if (getEncryptionPassword())
+    {
+        if (ui->openPasswordEdit->text().isEmpty())
+        {
+            QMessageBox::critical(this, tr("Error"), tr("Enter the password needed to open the encrypted document."));
+            ui->openPasswordEdit->setFocus();
+            return;
+        }
+
+        if (ui->openPasswordEdit->text() != ui->openPasswordConfirmEdit->text())
+        {
+            QMessageBox::critical(this, tr("Error"), tr("The passwords to open the document do not match."));
+            ui->openPasswordConfirmEdit->setFocus();
             return;
         }
     }
@@ -216,6 +247,14 @@ void SignDialog::updateUi()
     ui->contactInfoEdit->setEnabled(isCertificateUsed);
     ui->certificationLabel->setEnabled(isCertificateUsed && m_canCertify);
     ui->certificationCombo->setEnabled(isCertificateUsed && m_canCertify);
+
+    const bool canEncrypt = isCertificateUsed && m_canCertify;
+    const bool isEncrypted = canEncrypt && ui->encryptCheckBox->isChecked();
+    ui->encryptCheckBox->setEnabled(canEncrypt);
+    ui->openPasswordLabel->setEnabled(isEncrypted);
+    ui->openPasswordEdit->setEnabled(isEncrypted);
+    ui->openPasswordConfirmLabel->setEnabled(isEncrypted);
+    ui->openPasswordConfirmEdit->setEnabled(isEncrypted);
 
     ui->timestampUrlLabel->setEnabled(isTimestampUsed);
     ui->timestampUrlCombo->setEnabled(isTimestampUsed);

@@ -44,6 +44,9 @@ public:
 private:
     void onLibraryDoubleClicked(int row, int column);
 
+    /// Returns the file with the credits and licence texts of all third-party components
+    static QString getThirdPartyNoticesFile();
+
     Ui::PDFAboutDialog* ui;
 };
 

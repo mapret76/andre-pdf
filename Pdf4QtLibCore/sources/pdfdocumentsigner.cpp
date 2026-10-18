@@ -29,8 +29,11 @@
 #include "pdfdocumentwriter.h"
 #include "pdfform.h"
 #include "pdfsignaturehandler.h"
+#include "pdfsecurityhandler.h"
+#include "pdfocrapplyprocessor.h"
 
 #include <QBuffer>
+#include <QRandomGenerator>
 
 #include <algorithm>
 
@@ -88,6 +91,41 @@ PDFDocumentSigner::Result PDFDocumentSigner::sign(const Parameters& parameters, 
         return Result::ExistingSignaturesNotPreserved;
     }
 
+    // Encryption is applied first and the encrypted document is written as a whole,
+    // which the signatures already present would not survive.
+    Parameters encryptedParameters;
+    PDFDocument encryptedDocument;
+    if (parameters.encryptionUserPassword)
+    {
+        if (preserveExistingSignatures)
+        {
+            return Result::ExistingSignaturesNotPreserved;
+        }
+
+        // The owner password is never needed again: the document is locked against
+        // changes by its certification, the owner permissions only add to it.
+        QString ownerPassword;
+        for (int i = 0; i < 32; ++i)
+        {
+            ownerPassword += QChar(char('A' + QRandomGenerator::system()->bounded(26)));
+        }
+
+        PDFSecurityHandlerFactory::SecuritySettings settings;
+        settings.algorithm = PDFSecurityHandlerFactory::AES_256;
+        settings.userPassword = *parameters.encryptionUserPassword;
+        settings.ownerPassword = ownerPassword;
+        settings.permissions = getEncryptionPermissions(parameters.certification);
+
+        PDFDocumentBuilder builder(parameters.document);
+        builder.setSecurityHandler(PDFSecurityHandlerFactory::createSecurityHandler(settings));
+        encryptedDocument = builder.build();
+
+        encryptedParameters = parameters;
+        encryptedParameters.document = &encryptedDocument;
+        encryptedParameters.originalDocumentData.clear();
+    }
+    const Parameters& effectiveParameters = parameters.encryptionUserPassword ? encryptedParameters : parameters;
+
     // The size of the signature is not stable, so we cannot reserve exactly the
     // size of a trial signature. We start with the trial signature enlarged by
     // the initial reserve and enlarge it further, if the final signature does
@@ -104,7 +142,7 @@ PDFDocumentSigner::Result PDFDocumentSigner::sign(const Parameters& parameters, 
     {
         QByteArray attemptResult;
         int requiredSignatureSize = 0;
-        const Result result = signAttempt(parameters, trialSignature, reservedSignatureSize, preserveExistingSignatures, attemptResult, requiredSignatureSize);
+        const Result result = signAttempt(effectiveParameters, trialSignature, reservedSignatureSize, preserveExistingSignatures, attemptResult, requiredSignatureSize);
 
         if (result == Result::OK)
         {
@@ -288,13 +326,82 @@ PDFDocumentSigner::Result PDFDocumentSigner::signAttempt(const Parameters& param
     QByteArray writtenDocument = buffer.data();
     buffer.close();
 
-    if (!verifySignedDocument(writtenDocument, signatureField, isDocumentTimestamp))
+    if (!verifySignedDocument(writtenDocument, signatureField, isDocumentTimestamp, parameters.encryptionUserPassword.value_or(QString())))
     {
         return Result::VerificationFailed;
     }
 
     signedDocument = qMove(writtenDocument);
     return Result::OK;
+}
+
+PDFDocumentSigner::SignedFileCheck PDFDocumentSigner::checkSignedFile(const QByteArray& signedFile,
+                                                                     const QString& signatureFieldName,
+                                                                     const QString& password)
+{
+    SignedFileCheck check;
+
+    bool passwordOffered = false;
+    auto getPassword = [&password, &passwordOffered](bool* ok)
+    {
+        *ok = !passwordOffered;
+        passwordOffered = true;
+        return password;
+    };
+    PDFDocumentReader reader(nullptr, getPassword, false, false);
+    const PDFDocument document = reader.readFromBuffer(signedFile);
+    if (reader.getReadingResult() != PDFDocumentReader::Result::OK)
+    {
+        return check;
+    }
+
+    check.isOpened = true;
+    const PDFSecurityHandler* securityHandler = document.getStorage().getSecurityHandler();
+    check.isEncrypted = securityHandler && securityHandler->getMode() != EncryptionMode::None;
+    check.certification = static_cast<Certification>(PDFOCRApplyProcessor::getCertificationPermissions(&document));
+
+    PDFCertificateStore store;
+    PDFSignatureHandler::Parameters parameters;
+    parameters.store = &store;
+    parameters.enableVerification = true;
+    parameters.useSystemCertificateStore = false;
+
+    const PDFForm form = PDFForm::parse(&document, document.getCatalog()->getFormObject());
+    for (const PDFSignatureVerificationResult& result : PDFSignatureHandler::verifySignatures(form, signedFile, parameters))
+    {
+        if (result.getSignatureFieldQualifiedName() == signatureFieldName)
+        {
+            check.isSignatureFound = true;
+            check.isSignatureValid = result.isSignatureValid();
+            check.errors = result.getErrors();
+        }
+    }
+
+    return check;
+}
+
+uint32_t PDFDocumentSigner::getEncryptionPermissions(Certification certification)
+{
+    using Permission = PDFSecurityHandler::Permission;
+
+    // Bits 1-2 must be zero, the reserved bits 7-8 and 13-32 one (ISO 32000-2, Table 22)
+    uint32_t permissions = 0xFFFFF0C0u;
+    permissions |= uint32_t(Permission::PrintLowResolution) | uint32_t(Permission::PrintHighResolution) |
+                   uint32_t(Permission::CopyContent) | uint32_t(Permission::Accessibility);
+    switch (certification)
+    {
+        case Certification::None:
+        case Certification::FormFilling:
+            // Signing an approval signature later is form filling, too
+            permissions |= uint32_t(Permission::ModifyFormFields);
+            break;
+        case Certification::FormFillingAndAnnotations:
+            permissions |= uint32_t(Permission::ModifyFormFields) | uint32_t(Permission::ModifyInteractiveItems);
+            break;
+        case Certification::NoChanges:
+            break;
+    }
+    return permissions;
 }
 
 void PDFDocumentSigner::addCertification(PDFDocumentBuilder& builder, PDFObjectReference signatureDictionary, Certification certification)
@@ -345,9 +452,18 @@ void PDFDocumentSigner::addCertification(PDFDocumentBuilder& builder, PDFObjectR
 
 bool PDFDocumentSigner::verifySignedDocument(const QByteArray& signedDocument,
                                              PDFObjectReference signatureField,
-                                             bool isDocumentTimestamp)
+                                             bool isDocumentTimestamp,
+                                             const QString& password)
 {
-    PDFDocumentReader reader(nullptr, nullptr, true, false);
+    // The password is offered once, a wrong one fails the verification
+    bool passwordOffered = false;
+    auto getPassword = [&password, &passwordOffered](bool* ok)
+    {
+        *ok = !passwordOffered;
+        passwordOffered = true;
+        return password;
+    };
+    PDFDocumentReader reader(nullptr, getPassword, true, false);
     PDFDocument document = reader.readFromBuffer(signedDocument);
 
     if (reader.getReadingResult() != PDFDocumentReader::Result::OK)

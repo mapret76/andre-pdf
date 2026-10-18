@@ -44,7 +44,7 @@ public:
     /// \param parent Parent widget
     /// \param isSceneEmpty No signature graphics were created
     /// \param canCertify Document has no signature yet, so the signature can certify it
-    explicit SignDialog(QWidget* parent, bool isSceneEmpty, bool canCertify);
+    explicit SignDialog(QWidget* parent, bool isSceneEmpty, bool canCertify = true);
     virtual ~SignDialog() override;
 
     virtual void accept() override;
@@ -76,6 +76,9 @@ public:
     QString getContactInfoText() const;
     QString getTimestampUrl() const;
     pdf::PDFDocumentSigner::Certification getCertification() const;
+
+    /// Returns the password needed to open the signed document, when it is to be encrypted
+    std::optional<QString> getEncryptionPassword() const;
     const pdf::PDFCertificateEntry* getCertificate() const;
 
 private:

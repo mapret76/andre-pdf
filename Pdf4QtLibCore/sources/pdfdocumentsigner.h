@@ -29,7 +29,10 @@
 #include <QByteArray>
 #include <QCoreApplication>
 #include <QDateTime>
+
+#include <optional>
 #include <QString>
+#include <QStringList>
 
 #include <functional>
 
@@ -128,6 +131,14 @@ public:
         /// Certification of the document, only for a signature (not for a document timestamp)
         Certification certification = Certification::None;
 
+        /// When set, the document is encrypted (AES-256) before it is signed, and the
+        /// password is needed to open it; an empty password opens it, but its owner
+        /// permissions still apply. The owner password is random, the permissions
+        /// follow the certification (printing, copying and accessibility always,
+        /// form filling and comments as the certification allows them). The whole
+        /// document is written again, so it must not be signed yet.
+        std::optional<QString> encryptionUserPassword;
+
         /// Progress reporting of the document writer, can be nullptr
         PDFProgress* progress = nullptr;
     };
@@ -142,6 +153,27 @@ public:
     /// Returns the localized message describing the result
     /// \param result Result
     static QString getResultMessage(Result result);
+
+    /// What a reader finds in a signed file, read back from its bytes
+    struct SignedFileCheck
+    {
+        bool isOpened = false;              ///< The file was read (with the password, when it is encrypted)
+        bool isEncrypted = false;           ///< The file is encrypted
+        bool isSignatureFound = false;      ///< The signature field of the given name holds a signature
+        bool isSignatureValid = false;      ///< The signature covers the file and is mathematically valid
+        Certification certification = Certification::None; ///< Certification of the document
+        QStringList errors;                 ///< Errors of the signature verification
+
+        /// Returns true, if everything checked is in order
+        bool isOK() const { return isOpened && isSignatureFound && isSignatureValid; }
+    };
+
+    /// Reads a signed file back and checks the signature of the given field. The
+    /// trust in the certificate is not checked, it is a decision of the reader.
+    /// \param signedFile Bytes of the file
+    /// \param signatureFieldName Fully qualified name of the signature field
+    /// \param password Password opening the file, when it is encrypted
+    static SignedFileCheck checkSignedFile(const QByteArray& signedFile, const QString& signatureFieldName, const QString& password);
 
     /// Returns true, if the document contains at least one signed signature field
     /// \param document Document
@@ -169,6 +201,9 @@ private:
     /// \param builder Builder of the signed document
     /// \param signatureDictionary Signature dictionary
     /// \param certification Certification, must not be None
+    /// Returns the permissions of the encrypted document for the certification
+    static uint32_t getEncryptionPermissions(Certification certification);
+
     static void addCertification(PDFDocumentBuilder& builder, PDFObjectReference signatureDictionary, Certification certification);
 
     /// Returns the data signed only to find out the size of the signature
@@ -194,9 +229,11 @@ private:
     /// \param signedDocument Bytes of the signed document
     /// \param signatureField Field holding the signature being verified
     /// \param isDocumentTimestamp Field holds a document timestamp
+    /// \param password Password opening the document, when it is encrypted
     static bool verifySignedDocument(const QByteArray& signedDocument,
                                      PDFObjectReference signatureField,
-                                     bool isDocumentTimestamp);
+                                     bool isDocumentTimestamp,
+                                     const QString& password);
 
     /// Verifies, that the timestamp token of the given field belongs to the
     /// bytes of the written document covered by it. The certificate chain of

@@ -124,6 +124,9 @@ private:
 
     QString getSignedFileName() const;
 
+    /// Reads the saved signed file back and reports what a reader finds in it
+    void checkSavedFile(const QString& fileName, const QString& signatureName, const QString& password, bool isDocumentTimestamp);
+
     std::array<QAction*, LastAction> m_actions;
     std::array<pdf::PDFWidgetTool*, LastTool> m_tools;
     pdf::PDFPageContentEditorWidget* m_editorWidget;

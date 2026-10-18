@@ -8,6 +8,56 @@ This file is the project ledger: decisions, the roadmap, and a dated progress
 log. Keep it current in the same commit as the work it describes. It is never
 git-ignored.
 
+## AUTOPILOT - RESUME HERE
+
+Andre, 2026-10-18: **"Finish this project unattended. Remember to give credit to
+all the GPL and other software that is used."** Sessions run without stopping to
+ask. Every decision taken on his behalf goes into the Decisions table, marked
+*(autopilot)*, so he can reverse it. Work the queue top to bottom, and for each item:
+implement -> build `build-full` (and `build-core` tests) -> commit + push ->
+tick it here in the same commit. Self-wakeups continue the work: a Claude Routine
+fires into the session (`trig_01CP4nHgdsKiRXKYaTL22aVP`, "Andre PDF autopilot",
+every 2 hours at :25 UTC, session `session_01T6oBgM8WAdj7LjGHThvWHP`), and the Routine is
+deleted when the queue is empty.
+
+Gates that only Andre can pass (installing on his PC, Acrobat Reader checks,
+his own certificate, an Android phone) are listed under "Waiting on Andre". They
+do not block the queue.
+
+Credits rule: every third-party component that is **distributed**, or whose
+**code or data we adapted**, gets an entry in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
+(name, author, licence, URL, what we use it for) and its licence text in
+`3rdparty_licenses/`, and it is shown in Help -> About. Add the entry in the same
+commit that brings the component in.
+
+Queue:
+- [x] A1 Credits: THIRD-PARTY-NOTICES.md covering everything shipped today, licence texts, About dialog
+- [x] A2 Phase 2.4: QR code + SHA-256 fingerprint of the pre-signing document in the visible stamp
+- [x] A3 Phase 2.5: one "Sign & Lock" action (optional encrypt -> certify -> re-open -> verify)
+- [x] A4 Rebrand to "Andre PDF" (window titles, About, installer product name; internal settings ids kept)
+- [ ] A5 Phase 3.1: signature library - 4 slots, import from a scanned image (background removed), DPAPI-protected on Windows
+- [ ] A6 Phase 3.2: initial every page (chosen slot, position, skip pages)
+- [ ] A7 Phase 3.3: find signature lines (existing fields, "Signature"/"Signed" labels, underscores), sign several, checklist; Lock disabled until all are signed; the last one locks (field /Lock /P)
+- [ ] A8 Phase 3.4: split a contract pack (by bookmarks / page ranges / detected first pages) + batch initial-sign-lock
+- [ ] A9 Phase 4.1: size reduction before signing (on PDFOptimizer + image optimizer), blocked after the first signature
+- [ ] A10 Phase 4.2: export to Word (open in M365 Word) and Excel (tables -> .xlsx)
+- [ ] A11 Phase 4.3: Share: Windows Share sheet (email/WhatsApp), mail with attachment
+- [ ] A12 Phase 4.4: highlight/comment polish; contract redline report in DocDiff
+- [ ] A13 Phase 6: font identification, installed check, find/download/install, embed
+- [ ] A14 Phase 5: Android - Pdf4QtLibCore on arm64 in CI, then Qt Quick viewer + sign with .pfx, APK from CI
+- [ ] A15 Phase 7: scan-font engine
+- [ ] A16 Release: MSI + APK from CI, ledger and skill final, user guide in docs/andre/
+
+Waiting on Andre:
+- **GitHub `workflow` scope for the vault (blocks A14 Android CI and any change under
+  `.github/workflows/`).** The vault's `gh` token has only `repo`, `gist` and `read:org`, so
+  GitHub refuses pushes that touch workflow files. Adding a deploy key was refused by
+  Claude's permission classifier, so Andre does it once. **On andre-vault:**
+  `gh auth refresh -h github.com -s workflow`. It shows a code to enter at
+  github.com/login/device. Until then the MSI keeps the file name `JakubMelka.PDF4QT_<version>.msi`.
+- Phase 1 gate: install the MSI and open his PDFs.
+- Phase 2 gate: certify a PDF with his own certificate, check it in Acrobat Reader.
+
 ## Requirements (as Andre stated them, 2026-10-17/18)
 
 1. Installs on the Windows desktop.
@@ -44,6 +94,10 @@ behind it in [docs/andre/options-report.md](docs/andre/options-report.md).
 | 2026-10-18 | `master` is our branch; upstream is merged in, never rebased onto | Keeps history honest and lets us pull upstream fixes with `git fetch upstream && git merge upstream/master`. |
 | 2026-10-18 | No reverse engineering of PDF-XChange or Acrobat binaries | Their EULAs forbid it (PDF-XChange EULA 2026 s3(V)). Every feature is specified in ISO 32000-2 (free since 2023) and ETSI PAdES; we study output files only, never their code. |
 | 2026-10-18 | Contract signing is built first | It is the feature Andre needs most and the one no free tool does end to end. Font-faithful scan editing is last (hardest, least urgent). |
+| 2026-10-18 | *(autopilot)* Credits: `THIRD-PARTY-NOTICES.md` in the repo, `THIRD-PARTY-NOTICES.txt` assembled at install time (our list + `LICENSE` + `3rdparty_licenses/` + every vcpkg `copyright` file), one row per component in Help -> About | Andre asked for credit to all GPL and other software. Taking the texts from vcpkg at build time keeps them exact for whatever versions are shipped. Qt is LGPL-3.0 and stays dynamically linked and replaceable. |
+| 2026-10-18 | *(autopilot)* Verification stamp = QR code + text; the QR holds plain text (signer, UTC time, lock level, SHA-256 of the certificate, SHA-256 of the file before signing) | Any phone QR scanner shows it, no server needed. The file fingerprint is checkable because the signature is appended to the original bytes. An online "verify" page would need a hosted service, so there is none. |
+| 2026-10-18 | *(autopilot)* "Sign & Lock" is the Sign dialog itself, not a second button: it defaults to certify "no changes", can encrypt first (AES-256, password to open, random owner password that is discarded, permissions follow the lock level), and re-reads the saved file and reports what a reader will find | One dialog, one click, and no duplicate flows to maintain. Encrypting after signing would break the signature, so the order is fixed in code. |
+| 2026-10-18 | *(autopilot)* Rebrand only the names users see: Andre PDF Editor / Viewer / Pages / Compare, launcher "Andre PDF", installer "Andre PDF" by Andre Pretorius with a new upgrade code; internal application and organisation names stay `PDF4QT ...` / `MelkaJ` | Settings and the OCR model folders are keyed on the internal names. The new upgrade code installs alongside an upstream PDF4QT install instead of replacing it. |
 
 ## Roadmap
 
@@ -234,3 +288,29 @@ upstream author's machine, not ours).
 - **Open:** Andre's MSI install test (Phase 1 gate); step 4 QR code and document
   hash; step 5 one-button Sign & Lock; acceptance in Acrobat Reader needs a new
   MSI build that includes this work.
+
+### 2026-10-18 (night) - autopilot: A1-A4
+- **A1 credits:** `THIRD-PARTY-NOTICES.md` (every distributed library, the code included
+  in the tree, the build tools, the standards), `cmake/AssembleThirdPartyNotices.cmake`
+  installs `THIRD-PARTY-NOTICES.txt` (WiX component added), LGPL-3.0/GPL-3.0 texts in
+  `3rdparty_licenses/`, About lists PDF4QT first plus oneTBB, libpng, Clipper2 and the
+  Windows-only vcpkg libraries; About's copyright line credits Jakub Melka.
+- **A2 stamp:** `PDFSignatureStamp` (core) draws QR + text; Nayuki's QR Code generator
+  (MIT, commit 3c6d0b3) vendored in `Pdf4QtLibCore/sources/qrcodegen/`. Test
+  `verificationStamp` decodes the drawn QR with `zbarimg` (installed on the vault).
+  If there is no room under the signature graphics, the stamp goes above them.
+- **A3 sign & lock:** `Parameters::encryptionUserPassword`, `getEncryptionPermissions`,
+  `checkSignedFile` (core). Sign dialog: encrypt option + confirm, disabled when already
+  signed. After saving, the file is re-read from disk and the result shown. Tests
+  `encryptedCertification` (wrong password, permissions, tampering, refusal on a signed
+  file) and `dialogLockAndEncryption`.
+- **A4 rebrand:** display names, MSI product/manufacturer/folders/shortcuts/upgrade code,
+  MSIX identity. The MSI file name (set in the workflow) waits for the `workflow` scope.
+- Full local build set up (`build-full`, Release, GUI + OCR with the Ubuntu Tesseract via
+  a CMake shim in `~/.local/andre-pdf-deps/lib/cmake/Tesseract`; packages
+  `qt6-speech-dev libtesseract-dev libleptonica-dev libfontconfig-dev zbar-tools`).
+  Fixed: `UnitTestsSignatureAppearance` used the two-argument `SignDialog`
+  constructor; `canCertify` now defaults to true.
+- Full suite on the vault (`ctest` in `build-full`): 33 of 34 pass. `UnitTestsFontEncoding::test_standard_font_zapf_dingbats`
+  fails on the vault only (the Ubuntu URW clone `D050000L.otf` is found but yields no glyphs); the code is
+  upstream's and untouched, Linux CI is the reference. Investigate in Phase 6 (fonts).

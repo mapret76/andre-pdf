@@ -91,6 +91,41 @@
       <item row="5" column="1">
        <widget class="QComboBox" name="certificationCombo"/>
       </item>
+      <item row="6" column="0" colspan="2">
+       <widget class="QCheckBox" name="encryptCheckBox">
+        <property name="text">
+         <string>Encrypt: a password is needed to open the signed document</string>
+        </property>
+       </widget>
+      </item>
+      <item row="7" column="0">
+       <widget class="QLabel" name="openPasswordLabel">
+        <property name="text">
+         <string>Password to open</string>
+        </property>
+       </widget>
+      </item>
+      <item row="7" column="1">
+       <widget class="QLineEdit" name="openPasswordEdit">
+        <property name="echoMode">
+         <enum>QLineEdit::Password</enum>
+        </property>
+       </widget>
+      </item>
+      <item row="8" column="0">
+       <widget class="QLabel" name="openPasswordConfirmLabel">
+        <property name="text">
+         <string>Confirm password</string>
+        </property>
+       </widget>
+      </item>
+      <item row="8" column="1">
+       <widget class="QLineEdit" name="openPasswordConfirmEdit">
+        <property name="echoMode">
+         <enum>QLineEdit::Password</enum>
+        </property>
+       </widget>
+      </item>
      </layout>
     </widget>
    </item>

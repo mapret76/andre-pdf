@@ -4,10 +4,10 @@
   <!-- 1 when the OCR support is built (PDF4QT_ENABLE_OCR of CMake), otherwise 0: the OCR components are left out -->
   <?define PDF4QT_ENABLE_OCR="${PDF4QT_WIX_OCR}" ?>
 
-  <Product Id="*" Name="PDF4QT" Language="1033" Version="${PDF4QT_VERSION}" Manufacturer="Jakub Melka" UpgradeCode="26336d8a-b2e7-44fc-9a73-68aa99900c7a">
-    <Package Id="*" InstallerVersion="200" Compressed="yes" InstallScope="perMachine" Manufacturer="Jakub Melka" Keywords="pdf,editor,viewer" />
+  <Product Id="*" Name="Andre PDF" Language="1033" Version="${PDF4QT_VERSION}" Manufacturer="Andre Pretorius" UpgradeCode="db099924-5eda-4976-9613-561d9aeb9298">
+    <Package Id="*" InstallerVersion="200" Compressed="yes" InstallScope="perMachine" Manufacturer="Andre Pretorius" Keywords="pdf,editor,viewer,sign" Comments="Andre PDF is based on PDF4QT by Jakub Melka" />
 
-    <MajorUpgrade DowngradeErrorMessage="A newer version of PDF4QT is already installed." />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Andre PDF is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <WixVariable Id="WixUILicenseRtf" Value="explic.rtf" />
@@ -43,11 +43,11 @@
   <Fragment>
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFilesFolder">
-        <Directory Id="INSTALLFOLDER" Name="PDF4QT" />
+        <Directory Id="INSTALLFOLDER" Name="Andre PDF" />
       </Directory>
       <Directory Id="DesktopFolder" Name="Desktop"/>
       <Directory Id="ProgramMenuFolder" Name="Programs">
-        <Directory Id="ProgramMenuDir" Name="PDF4QT">
+        <Directory Id="ProgramMenuDir" Name="Andre PDF">
           <Component Id="ProgramMenuDir" Guid="{33A118A2-C455-45C1-9E0C-710750A71335}">
             <RemoveFolder Id="ProgramMenuDir" On="uninstall" />
             <RegistryValue Root="HKMU" Key="Software\[Manufacturer]\[ProductName]" Type="string" Value="" KeyPath="yes" />
@@ -64,6 +64,9 @@
       </Component>
       <Component Id="cmplibssl" Directory="INSTALLFOLDER" Guid="{B0309455-5073-465A-B3C4-83CEAE720761}">
         <File Id="fillibssl" KeyPath="yes" Source="$(var.MyInstallDir)\libssl-3-x64.dll" />
+      </Component>
+      <Component Id="cmpThirdPartyNotices" Directory="INSTALLFOLDER" Guid="{F8B07BC4-C5F4-41D3-85A8-4954387F0202}">
+        <File Id="filThirdPartyNotices" KeyPath="yes" Source="$(var.MyInstallDir)\THIRD-PARTY-NOTICES.txt" />
       </Component>
       <Component Id="cmpPdf4QtLibCore" Directory="INSTALLFOLDER" Guid="{C8CFFAE9-F913-4103-BD46-A8299E42938E}">
         <File Id="filPdf4QtLibCore" KeyPath="yes" Source="$(var.MyInstallDir)\Pdf4QtLibCore.dll" />
@@ -263,7 +266,7 @@ ${PDF4QT_WIX_OCR_COMPONENTS}<?endif?>
     <ComponentGroup Id="PDF4QT_Editor">
       <Component Id="cmpPdf4QtEditor" Directory="INSTALLFOLDER" Guid="{52D3CF62-F556-4E7A-BCEB-75E5E65ED786}">
         <File Id="filPdf4QtEditor" KeyPath="yes" Source="$(var.MyInstallDir)\Pdf4QtEditor.exe">
-          <Shortcut Id="PDF4QT_Editor_Shortcut" Directory="ProgramMenuDir" Name="PDF4QT Editor" Description="Advanced PDF editor" WorkingDirectory="INSTALLFOLDER" Icon="PDF4QT_VP_Icon.exe" IconIndex="0" Advertise="yes"/>
+          <Shortcut Id="PDF4QT_Editor_Shortcut" Directory="ProgramMenuDir" Name="Andre PDF Editor" Description="Edit, sign and lock PDF documents" WorkingDirectory="INSTALLFOLDER" Icon="PDF4QT_VP_Icon.exe" IconIndex="0" Advertise="yes"/>
         </File>
         <ProgId Id='pdf4qt_default_editor.pdf' Description='PDF Document'>
           <Extension Id='pdf' ContentType='application/pdf'>
@@ -282,7 +285,7 @@ ${PDF4QT_WIX_OCR_COMPONENTS}<?endif?>
     <ComponentGroup Id="PDF4QT_Viewer">
       <Component Id="cmpPdf4QtViewer" Directory="INSTALLFOLDER" Guid="{2D222775-6DA7-43E6-B212-3A142622190C}">
         <File Id="filPdf4QtViewer" KeyPath="yes" Source="$(var.MyInstallDir)\Pdf4QtViewer.exe">
-          <Shortcut Id="PDF4QT_Viewer_Shortcut" Directory="ProgramMenuDir" Name="PDF4QT Viewer" Description="Simple PDF viewer" WorkingDirectory="INSTALLFOLDER" Icon="PDF4QT_VL_Icon.exe" IconIndex="0" Advertise="yes"/>
+          <Shortcut Id="PDF4QT_Viewer_Shortcut" Directory="ProgramMenuDir" Name="Andre PDF Viewer" Description="Simple PDF viewer" WorkingDirectory="INSTALLFOLDER" Icon="PDF4QT_VL_Icon.exe" IconIndex="0" Advertise="yes"/>
         </File>
         <ProgId Id='pdf4qt_default_viewer.pdf' Description='PDF Document'>
           <Extension Id='pdf' ContentType='application/pdf'>
@@ -301,7 +304,7 @@ ${PDF4QT_WIX_OCR_COMPONENTS}<?endif?>
     <ComponentGroup Id="PDF4QT_PageMaster">
       <Component Id="cmpPdf4QtPageMaster" Directory="INSTALLFOLDER" Guid="{9D248BEE-BA78-4050-B362-0694B11AA326}">
         <File Id="filPdf4QtPageMaster" KeyPath="yes" Source="$(var.MyInstallDir)\Pdf4QtPageMaster.exe">
-          <Shortcut Id="PDF4QT_DPO_Shortcut" Directory="ProgramMenuDir" Name="PDF4QT PageMaster" Description="PDF Document page organizer" WorkingDirectory="INSTALLFOLDER" Icon="PDF4QT_DPO_Icon.exe" IconIndex="0" Advertise="yes"/>
+          <Shortcut Id="PDF4QT_DPO_Shortcut" Directory="ProgramMenuDir" Name="Andre PDF Pages" Description="Split, merge and organize pages" WorkingDirectory="INSTALLFOLDER" Icon="PDF4QT_DPO_Icon.exe" IconIndex="0" Advertise="yes"/>
         </File>
       </Component>
     </ComponentGroup>
@@ -315,7 +318,7 @@ ${PDF4QT_WIX_OCR_COMPONENTS}<?endif?>
     <ComponentGroup Id="PDF4QT_Diff">
       <Component Id="cmpPdf4QtDiff" Directory="INSTALLFOLDER" Guid="{067D40E9-4FAE-472D-BCC3-B92A23CA0028}">
         <File Id="filPdf4QtDiff" KeyPath="yes" Source="$(var.MyInstallDir)\Pdf4QtDiff.exe">
-          <Shortcut Id="PDF4QT_DD_Shortcut" Directory="ProgramMenuDir" Name="PDF4QT Diff" Description="Compare two similar PDF documents" WorkingDirectory="INSTALLFOLDER" Icon="PDF4QT_DD_Icon.exe" IconIndex="0" Advertise="yes"/>
+          <Shortcut Id="PDF4QT_DD_Shortcut" Directory="ProgramMenuDir" Name="Andre PDF Compare" Description="Compare two similar PDF documents" WorkingDirectory="INSTALLFOLDER" Icon="PDF4QT_DD_Icon.exe" IconIndex="0" Advertise="yes"/>
         </File>
       </Component>
     </ComponentGroup>

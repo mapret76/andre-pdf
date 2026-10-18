@@ -53,13 +53,26 @@ PDFAboutDialog::PDFAboutDialog(QWidget* parent) :
 
     QString html = ui->copyrightLabel->text();
     html.replace("PdfForQtViewer", QString("%1 %2").arg(QApplication::applicationDisplayName(), QApplication::applicationVersion()));
+    html.replace("Copyright 2018-2026 Jakub Melka. All rights reserved.",
+                 tr("Andre PDF is based on PDF4QT, Copyright 2018-2026 Jakub Melka and Contributors, MIT licence. "
+                    "Andre PDF changes Copyright 2026 Andre Pretorius, MIT licence. "
+                    "Every third-party component and its licence is listed below and in THIRD-PARTY-NOTICES.txt."));
     ui->copyrightLabel->setText(html);
 
     std::vector<pdf::PDFDependentLibraryInfo> infos = pdf::PDFDependentLibraryInfo::getLibraryInfo();
 
-    // License texts distributed with the application, one entry per row of the table
-    // (empty, when the text is not distributed)
-    std::vector<QString> licenseFiles(infos.size());
+    // The base program itself comes first
+    pdf::PDFDependentLibraryInfo pdf4qtInfo;
+    pdf4qtInfo.library = tr("PDF4QT by Jakub Melka and Contributors (Andre PDF is its fork)");
+    pdf4qtInfo.version = QStringLiteral(PDF4QT_PROJECT_VERSION);
+    pdf4qtInfo.license = QStringLiteral("MIT");
+    pdf4qtInfo.url = QStringLiteral("https://github.com/JakubMelka/PDF4QT");
+    infos.insert(infos.begin(), pdf4qtInfo);
+
+    // License texts distributed with the application, one entry per row of the table.
+    // The libraries without an own text point to THIRD-PARTY-NOTICES.txt, which holds
+    // the texts of all of them.
+    std::vector<QString> licenseFiles(infos.size(), getThirdPartyNoticesFile());
 
 #ifdef PDF4QT_OCR_TESSERACT
     {
@@ -167,6 +180,23 @@ PDFAboutDialog::PDFAboutDialog(QWidget* parent) :
 
     pdf::PDFWidgetUtils::scaleWidget(this, QSize(750, 600));
     pdf::PDFWidgetUtils::style(this);
+}
+
+QString PDFAboutDialog::getThirdPartyNoticesFile()
+{
+    const QString applicationDirectory = QApplication::applicationDirPath();
+    const QString candidates[] = {
+        applicationDirectory + QStringLiteral("/THIRD-PARTY-NOTICES.txt"),
+        applicationDirectory + QStringLiteral("/../share/doc/pdf4qt/THIRD-PARTY-NOTICES.txt")
+    };
+    for (const QString& candidate : candidates)
+    {
+        if (QFile::exists(candidate))
+        {
+            return QDir::cleanPath(candidate);
+        }
+    }
+    return candidates[0];
 }
 
 PDFAboutDialog::~PDFAboutDialog()

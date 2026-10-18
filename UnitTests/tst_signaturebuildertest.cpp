@@ -28,10 +28,16 @@
 #include "pdfdocumentreader.h"
 #include "pdfdocumentwriter.h"
 #include "pdfocrapplyprocessor.h"
+#include "pdfsignaturestamp.h"
+#include "pdfsecurityhandler.h"
 
 #include <QtTest>
 #include <QBuffer>
 #include <QTemporaryDir>
+#include <QPainter>
+#include <QProcess>
+#include <QStandardPaths>
+#include <QCryptographicHash>
 
 using namespace pdf;
 
@@ -91,6 +97,8 @@ private slots:
     void certification_data();
     void certification();
     void certificationMustBeFirst();
+    void verificationStamp();
+    void encryptedCertification();
 
 private:
     static bool createTestCertificate(const QTemporaryDir& directory, PDFCertificateEntry& certificate, QString& password);
@@ -706,6 +714,149 @@ void SignatureBuilderTest::certificationMustBeFirst()
     QCOMPARE(signDocument(readDocument(certified), certified, certificate, password, "Countersignature", countersigned), PDFDocumentSigner::Result::OK);
     const PDFDocument countersignedDocument = readDocument(countersigned);
     QCOMPARE(PDFOCRApplyProcessor::getCertificationPermissions(&countersignedDocument), PDFOCRApplyProcessor::CertificationPermissions::FormFilling);
+}
+
+void SignatureBuilderTest::verificationStamp()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    PDFCertificateEntry certificate;
+    QString password;
+    QVERIFY(createTestCertificate(directory, certificate, password));
+
+    // The entries of the certificate manager carry the parsed certificate
+    certificate.info.setName(PDFCertificateInfo::CommonName, QStringLiteral("Andre Test Signer"));
+    certificate.info.setCertificateData(QByteArray("DER encoded certificate"));
+
+    const QByteArray original("%PDF-1.7 original file");
+    const QDateTime time(QDate(2026, 10, 18), QTime(14, 30, 0), QTimeZone::UTC);
+    const PDFSignatureStamp::Data data = PDFSignatureStamp::create(certificate.info, time, PDFDocumentSigner::Certification::NoChanges, original);
+
+    QCOMPARE(data.signer, QStringLiteral("Andre Test Signer"));
+    QCOMPARE(data.documentSha256, QCryptographicHash::hash(original, QCryptographicHash::Sha256));
+    QCOMPARE(data.certificateSha256, QCryptographicHash::hash(certificate.info.getCertificateData(), QCryptographicHash::Sha256));
+
+    const QString payload = PDFSignatureStamp::getPayload(data);
+    QVERIFY(payload.contains(QStringLiteral("Signed: 2026-10-18T14:30:00Z")));
+    QVERIFY(payload.contains(QStringLiteral("Lock: no changes")));
+    QVERIFY(payload.contains(QString::fromLatin1(data.documentSha256.toHex().toUpper())));
+    QVERIFY(payload.contains(QString::fromLatin1(data.certificateSha256.toHex().toUpper())));
+    QVERIFY(PDFSignatureStamp::getTextLines(data).join('\n').contains(PDFSignatureStamp::formatFingerprint(data.documentSha256, 8)));
+    QCOMPARE(PDFSignatureStamp::formatFingerprint(QByteArray::fromHex("0123456789abcdef")), QStringLiteral("0123 4567 89AB CDEF"));
+
+    // A new file has no fingerprint of a previous version
+    const PDFSignatureStamp::Data newFileData = PDFSignatureStamp::create(certificate.info, time, PDFDocumentSigner::Certification::None, QByteArray());
+    QVERIFY(newFileData.documentSha256.isEmpty());
+    QVERIFY(!PDFSignatureStamp::getPayload(newFileData).contains(QStringLiteral("File before signing")));
+
+    const std::vector<std::vector<bool>> modules = PDFSignatureStamp::getQrModules(payload);
+    QVERIFY(modules.size() >= 21 && (modules.size() - 17) % 4 == 0);
+
+    // Drawn in PDF coordinates (y up) at 4 pixels per point
+    const QSizeF size = PDFSignatureStamp::getSize(data);
+    QImage image(qCeil(size.width() * 4) + 40, qCeil(size.height() * 4) + 40, QImage::Format_RGB32);
+    image.fill(Qt::white);
+    {
+        QPainter painter(&image);
+        painter.translate(20, image.height() - 20);
+        painter.scale(4.0, -4.0);
+        PDFSignatureStamp::draw(&painter, QRectF(QPointF(0, 0), size), data);
+    }
+    // Centre of the top left module of the finder pattern, inside the quiet zone of two modules
+    QCOMPARE(image.pixelColor(20 + 4 * 2 + 2, 20 + 4 * 2 + 2), QColor(Qt::black));
+    QCOMPARE(image.pixelColor(20 + 4 * 1 + 2, 20 + 4 * 1 + 2), QColor(Qt::white));
+
+    // The QR code reads back to the payload, when a QR reader is installed
+    const QString zbarimg = QStandardPaths::findExecutable(QStringLiteral("zbarimg"));
+    if (zbarimg.isEmpty())
+    {
+        QSKIP("zbarimg is not installed, the QR code is not decoded");
+    }
+    const QString imageFile = directory.filePath(QStringLiteral("stamp.png"));
+    QVERIFY(image.save(imageFile));
+    QProcess process;
+    process.start(zbarimg, { QStringLiteral("--raw"), QStringLiteral("-q"), QStringLiteral("-Sbinary"), imageFile });
+    QVERIFY(process.waitForFinished(30000));
+    QCOMPARE(QString::fromUtf8(process.readAllStandardOutput()).trimmed(), payload);
+}
+
+void SignatureBuilderTest::encryptedCertification()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    PDFCertificateEntry certificate;
+    QString password;
+    QVERIFY(createTestCertificate(directory, certificate, password));
+
+    PDFDocumentBuilder builder;
+    builder.appendPage(QRectF(0, 0, 300, 400));
+    const PDFDocument document = builder.build();
+
+    auto sign = [&](const PDFDocument& documentToSign, const QByteArray& original, PDFDocumentSigner::Certification certification, QByteArray& result)
+    {
+        PDFDocumentSigner::Parameters parameters;
+        parameters.document = &documentToSign;
+        parameters.originalDocumentData = original;
+        parameters.certification = certification;
+        parameters.encryptionUserPassword = QStringLiteral("open-me");
+        parameters.signFunction = [&](const QByteArray& data, QByteArray& signature) { return PDFSignatureFactory::sign(certificate, password, data, signature); };
+        parameters.createSignatureFieldFunction = [&](PDFDocumentBuilder& fieldBuilder, PDFObjectReference signatureDictionary)
+        {
+            return fieldBuilder.createSignatureField("Locked", signatureDictionary, documentToSign.getCatalog()->getPage(0)->getPageReference());
+        };
+        return PDFDocumentSigner::sign(parameters, result);
+    };
+
+    QByteArray locked;
+    QCOMPARE(sign(document, QByteArray(), PDFDocumentSigner::Certification::NoChanges, locked), PDFDocumentSigner::Result::OK);
+
+    // Without the password the document does not open
+    {
+        bool wrongOffered = false;
+        PDFDocumentReader reader(nullptr, [&wrongOffered](bool* ok) { *ok = !wrongOffered; wrongOffered = true; return QStringLiteral("wrong"); }, false, false);
+        reader.readFromBuffer(locked);
+        QVERIFY(reader.getReadingResult() != PDFDocumentReader::Result::OK);
+    }
+
+    bool offered = false;
+    PDFDocumentReader reader(nullptr, [&offered](bool* ok) { *ok = !offered; offered = true; return QStringLiteral("open-me"); }, false, false);
+    const PDFDocument lockedDocument = reader.readFromBuffer(locked);
+    QCOMPARE(reader.getReadingResult(), PDFDocumentReader::Result::OK);
+    QCOMPARE(PDFOCRApplyProcessor::getCertificationPermissions(&lockedDocument), PDFOCRApplyProcessor::CertificationPermissions::NoChanges);
+
+    const PDFSecurityHandler* securityHandler = lockedDocument.getStorage().getSecurityHandler();
+    QVERIFY(securityHandler && securityHandler->getMode() != EncryptionMode::None);
+    QVERIFY(securityHandler->isAllowed(PDFSecurityHandler::Permission::PrintHighResolution));
+    QVERIFY(securityHandler->isAllowed(PDFSecurityHandler::Permission::CopyContent));
+    QVERIFY(!securityHandler->isAllowed(PDFSecurityHandler::Permission::Modify));
+    QVERIFY(!securityHandler->isAllowed(PDFSecurityHandler::Permission::ModifyInteractiveItems));
+
+    const PDFForm form = PDFForm::parse(&lockedDocument, lockedDocument.getCatalog()->getFormObject());
+    PDFSignatureHandler::Parameters verifyParameters;
+    verifyParameters.useSystemCertificateStore = false;
+    const auto results = PDFSignatureHandler::verifySignatures(form, locked, verifyParameters);
+    QCOMPARE(results.size(), size_t(1));
+    QVERIFY2(results.front().isSignatureValid(), qPrintable(results.front().getErrors().join('\n')));
+
+    const PDFDocumentSigner::SignedFileCheck check = PDFDocumentSigner::checkSignedFile(locked, QStringLiteral("Locked"), QStringLiteral("open-me"));
+    QVERIFY(check.isOK());
+    QVERIFY(check.isEncrypted);
+    QCOMPARE(check.certification, PDFDocumentSigner::Certification::NoChanges);
+    QVERIFY(!PDFDocumentSigner::checkSignedFile(locked, QStringLiteral("Locked"), QStringLiteral("wrong")).isOpened);
+    QVERIFY(!PDFDocumentSigner::checkSignedFile(locked, QStringLiteral("Other"), QStringLiteral("open-me")).isSignatureFound);
+
+    // A changed byte inside the signed range is found
+    QByteArray tampered = locked;
+    const int index = tampered.indexOf("/Type");
+    QVERIFY(index > 0);
+    tampered[index + 1] = 't';
+    QVERIFY(!PDFDocumentSigner::checkSignedFile(tampered, QStringLiteral("Locked"), QStringLiteral("open-me")).isOK());
+
+    // A signed document cannot be encrypted, its signatures would break
+    QByteArray approved;
+    QCOMPARE(signDocument(document, QByteArray(), certificate, password, "Approval", approved), PDFDocumentSigner::Result::OK);
+    QByteArray encrypted;
+    QCOMPARE(sign(readDocument(approved), approved, PDFDocumentSigner::Certification::None, encrypted), PDFDocumentSigner::Result::ExistingSignaturesNotPreserved);
 }
 
 QTEST_MAIN(SignatureBuilderTest)

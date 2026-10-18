@@ -39,7 +39,7 @@ int main(int argc, char *argv[])
 
     QCoreApplication::setOrganizationName("MelkaJ");
     QCoreApplication::setApplicationName("PDF4QT LaunchPad");
-    QApplication::setApplicationDisplayName(QApplication::translate("Application", "PDF4QT LaunchPad"));
+    QApplication::setApplicationDisplayName(QApplication::translate("Application", "Andre PDF"));
 
     QCommandLineParser parser;
     QCommandLineOption configPath = pdf::PDFSettings::getConfigPathOption();
