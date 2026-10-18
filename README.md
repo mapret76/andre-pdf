@@ -1,5 +1,12 @@
 [![CI](https://github.com/JakubMelka/PDF4QT/actions/workflows/ci.yml/badge.svg)](https://github.com/JakubMelka/PDF4QT/actions/workflows/ci.yml)
 
+> **Andre PDF** is a fork of PDF4QT by Jakub Melka (MIT) with contract signing
+> (certification, signature library, initials, signature lines, contract packs), size
+> reduction, Word/Excel export, sharing, a redline compare report, font-faithful editing
+> of scans and an Android app. See [ANDRE-PDF.md](ANDRE-PDF.md),
+> [docs/andre/USER-GUIDE.md](docs/andre/USER-GUIDE.md) and
+> [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Everything below is upstream's README.
+
 # PDF4QT
 
 **(c) Jakub Melka 2018-2026**

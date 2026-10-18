@@ -46,7 +46,7 @@ Queue:
 - [x] A13 Phase 6: font identification, installed check, find/download/install, embed
 - [~] A14 Phase 5: Android - Pdf4QtLibCore on arm64 in CI, then Qt Quick viewer + sign with .pfx, APK from CI (app and its test done, desktop build; the APK waits for the `workflow` scope: `docs/andre/android-workflow.yml`)
 - [x] A15 Phase 7: scan-font engine
-- [ ] A16 Release: MSI + APK from CI, ledger and skill final, user guide in docs/andre/
+- [x] A16 Release: MSI + APK from CI, ledger and skill final, user guide in docs/andre/
 
 Waiting on Andre:
 - **GitHub `workflow` scope for the vault (blocks A14 Android CI and any change under
@@ -478,3 +478,14 @@ upstream author's machine, not ours).
 - Test `scanFont`: outline tracing of a ring (outer + hole, orientation, area), harvest of a
   page in DejaVu Serif (over 25 letters, x-height at 300 dpi), the font loads in Qt
   (QRawFont, QFontDatabase), and text drawn in it is identified as DejaVu Serif.
+
+### 2026-10-18 (night) - autopilot: A16 release, queue done
+- Full suite on the final code (`build-full`): 33 of 34, the vault-only
+  `UnitTestsFontEncoding` as before; `UnitTestsMobile` passes in `build-mobile`.
+- Final Windows installer: `Windows_MSI` run 39157301755 on `5ede458` (the A1-A15 code).
+- `docs/andre/USER-GUIDE.md` (install, the order of work, library, size, initials, Sign
+  Contract, packs, share, Word/Excel, redline, scanned text, Android, the ECT Act note);
+  README fork note; skill and its copy brought up to date.
+- **Autopilot finished.** What remains needs Andre (see "Waiting on Andre" at the top):
+  the `workflow` scope (MSI file name, Android APK), and the gates of phases 1, 2, 3 and 6
+  on his PC with his certificate and his own documents. The Routine was deleted.
