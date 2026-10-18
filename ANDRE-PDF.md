@@ -44,7 +44,7 @@ Queue:
 - [x] A11 Phase 4.3: Share: Windows Share sheet (email/WhatsApp), mail with attachment
 - [x] A12 Phase 4.4: highlight/comment polish; contract redline report in DocDiff
 - [x] A13 Phase 6: font identification, installed check, find/download/install, embed
-- [ ] A14 Phase 5: Android - Pdf4QtLibCore on arm64 in CI, then Qt Quick viewer + sign with .pfx, APK from CI
+- [~] A14 Phase 5: Android - Pdf4QtLibCore on arm64 in CI, then Qt Quick viewer + sign with .pfx, APK from CI (app and its test done, desktop build; the APK waits for the `workflow` scope: `docs/andre/android-workflow.yml`)
 - [ ] A15 Phase 7: scan-font engine
 - [ ] A16 Release: MSI + APK from CI, ledger and skill final, user guide in docs/andre/
 
@@ -443,3 +443,21 @@ upstream author's machine, not ours).
 - Tests: `fontNames`, `fontMatching` (identified among all installed fonts), `fontInstaller`
   (loopback catalogue, licence refusal, install, trial cache), `scanTextEdit` (end to end:
   font, size within 2 pt, position within 2 pt), `scanTextDialog`.
+
+### 2026-10-18 (night) - autopilot: A14 Android app (code done, APK waits)
+- `Pdf4QtMobile` (Qt Quick, on the core library only): open a PDF (content URIs of Android
+  too), pages rendered asynchronously by an image provider, Signature Library (import a
+  photo of a signature), "Sign": sign every found signature line (the image on each, the
+  last line the visible certification with the stamp) or tap where to sign; lock level;
+  certificate from a .pfx/.p12 file with its password (`PDFCertificateManager::createEntryFromPkcs12`,
+  new); writes `<name>_SIGNED.pdf` and checks it; Share opens the signed file. A signed
+  document gets an approval signature (countersigning). Material style, no storage
+  permission (storage access framework).
+- CMake: `PDF4QT_BUILD_MOBILE` (ON on Android, which also builds only the core library).
+  `PDF4QT_EXECUTION_PARALLEL`: libc++ (Android, macOS) runs the parallel algorithms
+  sequentially (risk 2 of the plan).
+- Tested on the vault as a desktop build (`build-mobile`): QML loads, `UnitTestsMobile`
+  (open, render, import a photo, sign every line, sign a signed file by a tap, wrong password).
+- **Waiting:** the Android CI workflow is written (`docs/andre/android-workflow.yml`) but
+  cannot be pushed into `.github/workflows/` without the `workflow` scope. Untested
+  risks: Blend2D JIT on arm64 (vcpkg default), Android share sheet (now: open the file).

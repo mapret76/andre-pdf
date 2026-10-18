@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<!-- Andre PDF for Android, based on PDF4QT (MIT). The files are chosen through the
+     storage access framework of Android, so no storage permission is requested. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="za.co.carouselworld.andrepdf" android:installLocation="auto">
+    <application android:name="org.qtproject.qt.android.bindings.QtApplication" android:label="Andre PDF" android:hardwareAccelerated="true" android:requestLegacyExternalStorage="false" android:allowBackup="false">
+        <activity android:name="org.qtproject.qt.android.bindings.QtActivity" android:configChanges="orientation|uiMode|screenLayout|screenSize|smallestScreenSize|layoutDirection|locale|fontScale|keyboard|keyboardHidden|navigation|mcc|mnc|density" android:label="Andre PDF" android:launchMode="singleTop" android:screenOrientation="unspecified" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <meta-data android:name="android.app.lib_name" android:value="-- %%INSERT_APP_LIB_NAME%% --"/>
+        </activity>
+    </application>
+</manifest>

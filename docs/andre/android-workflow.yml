@@ -1,0 +1,81 @@
+# Andre PDF for Android - GitHub Actions workflow (draft, not yet run).
+#
+# It lives here because the vault's GitHub token may not write .github/workflows/
+# (missing `workflow` scope). To activate it, on andre-vault:
+#   gh auth refresh -h github.com -s workflow
+#   git mv docs/andre/android-workflow.yml .github/workflows/Android.yml && git commit && git push
+# then: gh workflow run Android.yml -R mapret76/andre-pdf --ref master
+#
+# Builds the core library and the Qt Quick app for arm64 phones and uploads a
+# debug-signed APK (installable after allowing "unknown sources" for the file manager).
+
+name: Android_APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build_android:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          path: pdf4qt
+
+      - name: Install Qt for the host (tools)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.11.3'
+          host: 'linux'
+          target: 'desktop'
+          arch: 'linux_gcc_64'
+          dir: '${{ github.workspace }}/qt-host/'
+          modules: 'qtshadertools'
+          cache: 'true'
+          cache-key-prefix: android-host-qt-6113
+          aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@076e1659807d0b362a3ed684d54c2e9c775eb9c7'
+
+      - name: Install Qt for Android
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.11.3'
+          host: 'linux'
+          target: 'android'
+          arch: 'android_arm64_v8a'
+          dir: '${{ github.workspace }}/qt-android/'
+          modules: 'qtshadertools'
+          cache: 'true'
+          cache-key-prefix: android-qt-6113
+          aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@076e1659807d0b362a3ed684d54c2e9c775eb9c7'
+
+      - name: 'VCPKG: dependencies for arm64-android'
+        run: |
+          git clone --depth=1 https://github.com/microsoft/vcpkg.git
+          cd vcpkg
+          git fetch --depth=1 origin "$(python3 -c "import json;print(json.load(open('../pdf4qt/vcpkg.json'))['builtin-baseline'])")"
+          ./bootstrap-vcpkg.sh -disableMetrics
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          ./vcpkg install --triplet arm64-android openssl lcms zlib openjpeg freetype libjpeg-turbo libpng blend2d clipper2
+
+      - name: Configure and build the APK
+        working-directory: pdf4qt
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          "${{ github.workspace }}/qt-android/Qt/6.11.3/android_arm64_v8a/bin/qt-cmake" -B build -S . -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DQT_HOST_PATH="${{ github.workspace }}/qt-host/Qt/6.11.3/gcc_64" \
+            -DANDROID_SDK_ROOT="$ANDROID_SDK_ROOT" -DANDROID_NDK_ROOT="$ANDROID_NDK_LATEST_HOME" -DANDROID_ABI=arm64-v8a \
+            -DQT_CHAINLOAD_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake" \
+            -DVCPKG_TARGET_TRIPLET=arm64-android -DVCPKG_MANIFEST_MODE=OFF \
+            -DPDF4QT_BUILD_ONLY_CORE_LIBRARY=ON -DPDF4QT_BUILD_MOBILE=ON -DPDF4QT_ENABLE_OCR=OFF -DPDF4QT_BUILD_TESTS=OFF
+          cmake --build build --target apk -j4
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AndrePDF-Android-arm64
+          path: pdf4qt/build/Pdf4QtMobile/android-build/build/outputs/apk/**/*.apk
+          retention-days: 30

@@ -26,6 +26,7 @@
 #include "pdfglobal.h"
 #include "pdfobject.h"
 #include "pdfdocument.h"
+#include "pdfexecutionpolicy.h"
 
 #include <QMutex>
 
@@ -167,7 +168,7 @@ struct PDFApplyVisitorImpl<Visitor, PDFAbstractVisitor::Strategy::Parallel>
         const PDFObjectStorage::PDFObjects& objects = storage.getObjects();
         const PDFObject& trailerDictionary = storage.getTrailerDictionary();
 
-        std::for_each(std::execution::par, objects.cbegin(), objects.cend(), [visitor](const PDFObjectStorage::Entry& entry) { entry.object.accept(visitor); });
+        std::for_each(PDF4QT_EXECUTION_PARALLEL, objects.cbegin(), objects.cend(), [visitor](const PDFObjectStorage::Entry& entry) { entry.object.accept(visitor); });
         trailerDictionary.accept(visitor);
     }
 };
@@ -192,7 +193,7 @@ struct PDFApplyVisitorImpl<Visitor, PDFAbstractVisitor::Strategy::Merging>
             visitor->merge(&localVisitor);
         };
 
-        std::for_each(std::execution::par, objects.cbegin(), objects.cend(), process);
+        std::for_each(PDF4QT_EXECUTION_PARALLEL, objects.cbegin(), objects.cend(), process);
         trailerDictionary.accept(visitor);
     }
 };

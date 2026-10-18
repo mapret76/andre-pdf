@@ -46,7 +46,14 @@ if(WIN32 AND MSVC)
     option(PDF4QT_INSTALL_PREPARE_WIX_INSTALLER "Prepare Wix installer for Windows" ON)
 endif()
 
-option(PDF4QT_BUILD_ONLY_CORE_LIBRARY "Build only core library" OFF)
+# Android builds the core library and the mobile app (Qt Quick), not the desktop programs
+if(ANDROID)
+    set(PDF4QT_ANDROID_DEFAULT ON)
+else()
+    set(PDF4QT_ANDROID_DEFAULT OFF)
+endif()
+option(PDF4QT_BUILD_ONLY_CORE_LIBRARY "Build only core library" ${PDF4QT_ANDROID_DEFAULT})
+option(PDF4QT_BUILD_MOBILE "Build the mobile app (Qt Quick) on the core library" ${PDF4QT_ANDROID_DEFAULT})
 option(PDF4QT_BUILD_TESTS "Build UnitTests" ON)
 option(PDF4QT_ENABLE_COVERAGE "Instrument the code for the source based code coverage of clang (llvm-cov)" OFF)
 option(PDF4QT_ENABLE_OCR "Build the OCR support with the Tesseract engine (requires Tesseract and Leptonica)" ON)
@@ -73,6 +80,10 @@ endif()
 
 if(PDF4QT_BUILD_TESTS)
     find_package(Qt6 REQUIRED COMPONENTS Test)
+endif()
+
+if(PDF4QT_BUILD_MOBILE)
+    find_package(Qt6 REQUIRED COMPONENTS Quick QuickControls2)
 endif()
 
 qt_standard_project_setup(I18N_TRANSLATED_LANGUAGES en de cs es ko zh_CN zh_TW fr tr ru)
@@ -365,6 +376,10 @@ if(PDF4QT_INSTALL_INCLUDE)
     # Install generated export header
     install(FILES ${CMAKE_CURRENT_BINARY_DIR}/pdf4qtlibwidgets_export.h
             DESTINATION ${PDF4QT_INSTALL_INCLUDE_DIR}/Pdf4QtLibWidgets)
+endif()
+
+if(PDF4QT_BUILD_MOBILE)
+    add_subdirectory(Pdf4QtMobile)
 endif()
 
 if(NOT PDF4QT_BUILD_ONLY_CORE_LIBRARY)

@@ -486,3 +486,16 @@ if(NOT PDF4QT_BUILD_ONLY_CORE_LIBRARY)
     add_test(UnitTestsDiffOverlay "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsDiffOverlay")
     set_tests_properties(UnitTestsDiffOverlay PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
+
+if(PDF4QT_BUILD_MOBILE)
+    add_executable(UnitTestsMobile tst_mobiletest.cpp ../Pdf4QtMobile/pdfmobilecontroller.cpp)
+    target_include_directories(UnitTestsMobile PRIVATE ${CMAKE_SOURCE_DIR}/Pdf4QtMobile)
+    target_link_libraries(UnitTestsMobile PRIVATE Pdf4QtLibCore Qt6::Core Qt6::Gui Qt6::Test)
+    set_target_properties(UnitTestsMobile PROPERTIES
+        WIN32_EXECUTABLE OFF
+        MACOSX_BUNDLE OFF
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}
+    )
+    add_test(UnitTestsMobile "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsMobile")
+    set_tests_properties(UnitTestsMobile PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()

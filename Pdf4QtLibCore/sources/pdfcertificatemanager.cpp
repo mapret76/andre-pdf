@@ -238,6 +238,44 @@ QString PDFCertificateManager::generateCertificateFileName()
     return QString();
 }
 
+std::optional<PDFCertificateEntry> PDFCertificateManager::createEntryFromPkcs12(const QByteArray& data, const QString& password)
+{
+    openssl_ptr<BIO> pksBuffer(BIO_new(BIO_s_mem()), &BIO_free_all);
+    BIO_write(pksBuffer.get(), data.constData(), data.length());
+
+    openssl_ptr<PKCS12> pkcs12(d2i_PKCS12_bio(pksBuffer.get(), nullptr), &PKCS12_free);
+    if (!pkcs12)
+    {
+        return std::nullopt;
+    }
+
+    const QByteArray passwordByteArray = password.toUtf8();
+    const char* passwordPointer = passwordByteArray.isEmpty() ? nullptr : passwordByteArray.constData();
+    X509* certificatePtr = nullptr;
+    EVP_PKEY* keyPtr = nullptr;
+    if (PKCS12_parse(pkcs12.get(), passwordPointer, &keyPtr, &certificatePtr, nullptr) != 1)
+    {
+        return std::nullopt;
+    }
+
+    PDFCertificateEntry entry;
+    entry.type = PDFCertificateEntry::EntryType::User;
+    entry.pkcs12 = data;
+    if (certificatePtr)
+    {
+        if (std::optional<PDFCertificateInfo> info = PDFCertificateInfo::getCertificateInfo(certificatePtr))
+        {
+            entry.info = qMove(*info);
+        }
+        X509_free(certificatePtr);
+    }
+    if (keyPtr)
+    {
+        EVP_PKEY_free(keyPtr);
+    }
+    return entry;
+}
+
 bool PDFCertificateManager::isCertificateValid(const PDFCertificateEntry& certificateEntry, QString password)
 {
     QByteArray pkcs12data = certificateEntry.pkcs12;

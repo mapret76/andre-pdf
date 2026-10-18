@@ -66,6 +66,10 @@ public:
     static QString getCertificateDirectory();
     static QString generateCertificateFileName();
     static bool isCertificateValid(const PDFCertificateEntry& certificateEntry, QString password);
+
+    /// Creates a certificate entry from the data of a PKCS#12 file (.pfx, .p12), opened
+    /// by the password; returns nothing, when the data or the password are wrong
+    static std::optional<PDFCertificateEntry> createEntryFromPkcs12(const QByteArray& data, const QString& password);
 };
 
 class PDF4QTLIBCORESHARED_EXPORT PDFSignatureFactory

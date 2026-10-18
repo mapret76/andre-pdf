@@ -32,6 +32,15 @@
 
 #include <atomic>
 #include <execution>
+
+// Parallel execution policy of the standard library. The libc++ of Android (and of
+// macOS) has the parallel algorithms only as an experimental feature, there they run
+// sequentially.
+#if defined(__cpp_lib_execution) && defined(__cpp_lib_parallel_algorithm) && !defined(_LIBCPP_VERSION)
+#define PDF4QT_EXECUTION_PARALLEL std::execution::par
+#else
+#define PDF4QT_EXECUTION_PARALLEL std::execution::seq
+#endif
 #include <exception>
 #include <limits>
 #include <stdexcept>
