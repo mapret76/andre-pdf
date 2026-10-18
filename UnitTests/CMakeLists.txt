@@ -299,7 +299,7 @@ if(NOT PDF4QT_BUILD_ONLY_CORE_LIBRARY)
 endif()
 
 add_executable(UnitTestsSignatureBuilder tst_signaturebuildertest.cpp)
-target_link_libraries(UnitTestsSignatureBuilder PRIVATE Pdf4QtLibCore Qt6::Core Qt6::Gui Qt6::Test)
+target_link_libraries(UnitTestsSignatureBuilder PRIVATE Pdf4QtLibCore Qt6::Core Qt6::Gui Qt6::Network Qt6::Test)
 set_target_properties(UnitTestsSignatureBuilder PROPERTIES
     WIN32_EXECUTABLE OFF
     MACOSX_BUNDLE OFF

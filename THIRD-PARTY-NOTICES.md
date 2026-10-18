@@ -57,6 +57,12 @@ file already carries it.
 | [Zstandard](https://facebook.github.io/zstd/) | BSD-3-Clause | Compression |
 | Microsoft Visual C++ Runtime | Microsoft Visual Studio redistributable terms | C++ runtime DLLs |
 
+## Services used at run time (on request of the user)
+
+| Service | Terms | Use |
+| --- | --- | --- |
+| [Fontsource](https://fontsource.org) API and its CDN (jsDelivr) | MIT (Fontsource), fonts under their own free licences (mostly OFL-1.1, Apache-2.0) | Finding and downloading free fonts for editing scanned text in its original font. Only fonts with a free licence are downloaded; a downloaded font keeps its own licence, which the font file carries. |
+
 ## Tools used to build it (not distributed)
 
 | Tool | Licence |

@@ -36,6 +36,8 @@
 #include "pdfsizereducer.h"
 #include "pdfofficeexporter.h"
 #include "pdftextredline.h"
+#include "pdffontidentifier.h"
+#include "pdffontinstaller.h"
 #include "pdfrenderer.h"
 #include "pdfcms.h"
 #include "pdffont.h"
@@ -48,6 +50,9 @@
 #include <QTemporaryDir>
 #include <QPainter>
 #include <QProcess>
+#include <QTcpServer>
+#include <QTcpSocket>
+#include <QFontDatabase>
 #include <QRandomGenerator>
 #include <QStandardPaths>
 #include <QCryptographicHash>
@@ -121,6 +126,9 @@ private slots:
     void sizeReduction();
     void officeExport();
     void textRedline();
+    void fontNames();
+    void fontMatching();
+    void fontInstaller();
 
 private:
     static bool createTestCertificate(const QTemporaryDir& directory, PDFCertificateEntry& certificate, QString& password);
@@ -1430,6 +1438,200 @@ void SignatureBuilderTest::textRedline()
     // Many changes flow over several pages
     PDFTextRedline::Changes many(120, changes.front());
     QVERIFY(PDFTextRedline::createReport(many, QStringLiteral("a"), QStringLiteral("b")).getCatalog()->getPageCount() > 2);
+}
+
+void SignatureBuilderTest::fontNames()
+{
+    auto check = [](const char* baseFont, const char* family, bool bold, bool italic)
+    {
+        const PDFFontIdentifier::FontName name = PDFFontIdentifier::parsePdfFontName(baseFont);
+        return name.family == QLatin1String(family) && name.bold == bold && name.italic == italic;
+    };
+    QVERIFY(check("ABCDEF+TimesNewRomanPS-BoldMT", "Times New Roman", true, false));
+    QVERIFY(check("ArialMT", "Arial", false, false));
+    QVERIFY(check("Arial-BoldItalicMT", "Arial", true, true));
+    QVERIFY(check("Helvetica-Oblique", "Helvetica", false, true));
+    QVERIFY(check("QWERTY+Calibri", "Calibri", false, false));
+    QVERIFY(check("OpenSans-SemiBold", "Open Sans", true, false));
+    QVERIFY(check("SourceSansPro-Regular", "Source Sans", false, false));
+    QVERIFY(check("Times-Roman", "Times New Roman", false, false));
+
+    QCOMPARE(PDFFontIdentifier::getMetricCompatibleSubstitutes(QStringLiteral("arial")).value(0), QStringLiteral("Liberation Sans"));
+    QCOMPARE(PDFFontIdentifier::getMetricCompatibleSubstitutes(QStringLiteral("Calibri")), QStringList{ QStringLiteral("Carlito") });
+    QVERIFY(PDFFontIdentifier::getMetricCompatibleSubstitutes(QStringLiteral("Comic Neue")).isEmpty());
+    QVERIFY(!PDFFontIdentifier::isInstalled(QStringLiteral("No Such Font Family 12345")));
+}
+
+void SignatureBuilderTest::fontMatching()
+{
+    const QStringList families = { QStringLiteral("DejaVu Sans"), QStringLiteral("DejaVu Serif"), QStringLiteral("DejaVu Sans Mono"),
+                                   QStringLiteral("Nimbus Sans"), QStringLiteral("Nimbus Roman"), QStringLiteral("URW Bookman"), QStringLiteral("Nimbus Mono PS") };
+    for (const QString& family : families)
+    {
+        if (!PDFFontIdentifier::isInstalled(family))
+        {
+            QSKIP(qPrintable(QString("The font %1 is not installed").arg(family)));
+        }
+    }
+
+    // A "scan": the text in a known font on off-white paper, blurred by scaling and noisy
+    auto makeScan = [](const QString& family, bool bold, const QString& text)
+    {
+        QFont font(family);
+        font.setPixelSize(36);
+        font.setBold(bold);
+        QImage image(QFontMetrics(font).horizontalAdvance(text) + 30, 60, QImage::Format_RGB32);
+        image.fill(QColor(242, 240, 232));
+        {
+            QPainter painter(&image);
+            painter.setRenderHint(QPainter::TextAntialiasing);
+            painter.setFont(font);
+            painter.setPen(QColor(25, 25, 60));
+            painter.drawText(QPointF(15, 45), text);
+        }
+        image = image.scaled(image.width() / 2, image.height() / 2, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                     .scaled(image.width(), image.height(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        QRandomGenerator random(5);
+        for (int i = 0; i < image.width() * image.height() / 50; ++i)
+        {
+            image.setPixel(random.bounded(image.width()), random.bounded(image.height()), qRgb(200, 200, 200));
+        }
+        return image;
+    };
+
+    const QString text = QStringLiteral("Purchase Agreement 2026");
+    const std::vector<PDFFontIdentifier::Match> serif = PDFFontIdentifier::matchScan(makeScan(QStringLiteral("DejaVu Serif"), false, text), text, families);
+    QStringList found;
+    for (const auto& match : serif)
+    {
+        found << QString("%1%2 %3").arg(match.family, match.bold ? " bold" : "").arg(match.score, 0, 'f', 3);
+    }
+    QVERIFY2(!serif.empty() && serif.front().family == QStringLiteral("DejaVu Serif") && !serif.front().bold, qPrintable(found.join(", ")));
+    QVERIFY(serif.front().pixelSize > 20 && serif.front().pixelSize < 50);
+
+    const std::vector<PDFFontIdentifier::Match> bold = PDFFontIdentifier::matchScan(makeScan(QStringLiteral("DejaVu Sans"), true, text), text, families);
+    found.clear();
+    for (const auto& match : bold)
+    {
+        found << QString("%1%2 %3").arg(match.family, match.bold ? " bold" : "").arg(match.score, 0, 'f', 3);
+    }
+    QVERIFY2(!bold.empty() && bold.front().family == QStringLiteral("DejaVu Sans") && bold.front().bold, qPrintable(found.join(", ")));
+
+    // Among every installed font the true one is still among the best three
+    const QStringList all = PDFFontIdentifier::getLatinFamilies();
+    const std::vector<PDFFontIdentifier::Match> amongAll = PDFFontIdentifier::matchScan(makeScan(QStringLiteral("DejaVu Serif"), false, text), text, all, 3);
+    found.clear();
+    for (const auto& match : amongAll)
+    {
+        found << QString("%1%2 %3").arg(match.family, match.bold ? " bold" : "").arg(match.score, 0, 'f', 3);
+    }
+    QVERIFY2(std::any_of(amongAll.cbegin(), amongAll.cend(), [](const auto& match) { return match.family == QStringLiteral("DejaVu Serif"); }), qPrintable(found.join(", ")));
+
+    QColor paper;
+    QColor ink;
+    PDFFontIdentifier::getScanColors(makeScan(QStringLiteral("DejaVu Sans"), false, text), paper, ink);
+    QVERIFY(paper.lightness() > 220 && ink.lightness() < 120);
+    QVERIFY(PDFFontIdentifier::matchScan(QImage(), text, families).empty());
+}
+
+void SignatureBuilderTest::fontInstaller()
+{
+    QFile regularFile(QStringLiteral("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"));
+    QFile boldFile(QStringLiteral("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"));
+    if (!regularFile.open(QFile::ReadOnly) || !boldFile.open(QFile::ReadOnly))
+    {
+        QSKIP("The DejaVu fonts are not installed, they stand in for the downloaded fonts");
+    }
+    const QByteArray regular = regularFile.readAll();
+    const QByteArray bold = boldFile.readAll();
+
+    // A catalogue on the loopback interface, as the Fontsource API answers
+    QTcpServer server;
+    QVERIFY(server.listen(QHostAddress::LocalHost));
+    const QString base = QString("http://127.0.0.1:%1").arg(server.serverPort());
+    QStringList requests;
+    connect(&server, &QTcpServer::newConnection, &server, [&]()
+    {
+        QTcpSocket* socket = server.nextPendingConnection();
+        connect(socket, &QTcpSocket::readyRead, socket, [&, socket]()
+        {
+            const QByteArray request = socket->readAll();
+            const QByteArray path = request.split(' ').value(1);
+            requests << QString::fromLatin1(path);
+            QByteArray body;
+            QByteArray status = "200 OK";
+            if (path == "/v1/fonts?family=Test%20Font")
+            {
+                body = R"([{"id":"test-font","family":"Test Font","license":"OFL-1.1","category":"sans-serif"}])";
+            }
+            else if (path == "/v1/fonts?family=Paid%20Font")
+            {
+                body = R"([{"id":"paid-font","family":"Paid Font","license":"Proprietary","category":"serif"}])";
+            }
+            else if (path.startsWith("/v1/fonts?"))
+            {
+                body = "[]";
+            }
+            else if (path == "/v1/fonts/test-font")
+            {
+                body = QString(R"({"id":"test-font","variants":{"400":{"normal":{"latin":{"url":{"ttf":"%1/files/regular.ttf"}}}},"700":{"normal":{"latin":{"url":{"ttf":"%1/files/bold.ttf"}}}}}})").arg(base).toLatin1();
+            }
+            else if (path == "/files/regular.ttf")
+            {
+                body = regular;
+            }
+            else if (path == "/files/bold.ttf")
+            {
+                body = bold;
+            }
+            else
+            {
+                status = "404 Not Found";
+            }
+            socket->write("HTTP/1.0 " + status + "\r\nContent-Length: " + QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
+            socket->disconnectFromHost();
+        });
+    });
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QStandardPaths::setTestModeEnabled(true);
+    PDFFontInstaller::setTestConfiguration(base + QStringLiteral("/v1"), directory.filePath(QStringLiteral("fonts")));
+
+    QVERIFY(PDFFontInstaller::isFreeLicense(QStringLiteral("OFL-1.1")));
+    QVERIFY(!PDFFontInstaller::isFreeLicense(QStringLiteral("Proprietary")));
+
+    QString errorMessage;
+    const std::optional<PDFFontInstaller::FontInfo> font = PDFFontInstaller::find(QStringLiteral("Test Font"), &errorMessage);
+    QVERIFY2(font, qPrintable(errorMessage));
+    QCOMPARE(font->id, QStringLiteral("test-font"));
+    QCOMPARE(font->category, QStringLiteral("sans-serif"));
+    QVERIFY(!PDFFontInstaller::find(QStringLiteral("Missing Font"), &errorMessage));
+    QVERIFY(errorMessage.isEmpty());   // not found is not an error
+
+    // A font without a free licence is never downloaded
+    const std::optional<PDFFontInstaller::FontInfo> paid = PDFFontInstaller::find(QStringLiteral("Paid Font"));
+    QVERIFY(paid);
+    QVERIFY(PDFFontInstaller::download(*paid, 400, false, &errorMessage).isEmpty());
+    QVERIFY(!errorMessage.isEmpty());
+    QVERIFY(!requests.contains(QStringLiteral("/v1/fonts/paid-font")));
+
+    // Regular and bold exist, italics not: two files installed and loaded
+    QVERIFY2(PDFFontInstaller::install(*font, &errorMessage), qPrintable(errorMessage));
+    const QStringList installed = QDir(directory.filePath(QStringLiteral("fonts"))).entryList({ QStringLiteral("*.ttf") });
+    QCOMPARE(installed, (QStringList{ QStringLiteral("TestFont-Bold.ttf"), QStringLiteral("TestFont-Regular.ttf") }));
+    QVERIFY(PDFFontIdentifier::isInstalled(QStringLiteral("DejaVu Sans")));
+
+    // A font for the trial of the matching is cached, the second time without the network
+    QCOMPARE(PDFFontInstaller::loadForTrial(QStringLiteral("Test Font"), &errorMessage), QStringLiteral("DejaVu Sans"));
+    const qsizetype requestCount = requests.size();
+    QCOMPARE(PDFFontInstaller::loadForTrial(QStringLiteral("Test Font"), &errorMessage), QStringLiteral("DejaVu Sans"));
+    QCOMPARE(requests.size(), requestCount);
+    QVERIFY(PDFFontInstaller::loadForTrial(QStringLiteral("Missing Font")).isEmpty());
+
+    QVERIFY(PDFFontInstaller::getCandidateFamilies().contains(QStringLiteral("Tinos")));
+    PDFFontInstaller::setTestConfiguration(QStringLiteral("https://api.fontsource.org/v1"), QString());
+    QStandardPaths::setTestModeEnabled(false);
 }
 
 QTEST_MAIN(SignatureBuilderTest)
