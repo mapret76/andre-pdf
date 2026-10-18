@@ -33,6 +33,7 @@
 #include "pdfpageinitials.h"
 #include "pdfsignaturelinefinder.h"
 #include "pdfcontractpack.h"
+#include "pdfsizereducer.h"
 #include "pdfrenderer.h"
 #include "pdfcms.h"
 #include "pdffont.h"
@@ -115,6 +116,7 @@ private slots:
     void signatureLineLabels();
     void signatureLineFinder();
     void contractPack();
+    void sizeReduction();
 
 private:
     static bool createTestCertificate(const QTemporaryDir& directory, PDFCertificateEntry& certificate, QString& password);
@@ -1258,6 +1260,43 @@ void SignatureBuilderTest::contractPack()
         }
     });
     QVERIFY(hasAppearance);
+}
+
+void SignatureBuilderTest::sizeReduction()
+{
+    // A page with a large noisy photo, as a phone scan of a contract page
+    QImage photo(2480, 3508, QImage::Format_RGB32);
+    QRandomGenerator random(11);
+    for (int y = 0; y < photo.height(); ++y)
+    {
+        QRgb* line = reinterpret_cast<QRgb*>(photo.scanLine(y));
+        for (int x = 0; x < photo.width(); ++x)
+        {
+            const int level = 200 + int(random.bounded(40));
+            line[x] = qRgb(level, level - int(random.bounded(10)), level - 20);
+        }
+    }
+
+    PDFDocumentBuilder builder;
+    const PDFObjectReference page = builder.appendPage(QRectF(0, 0, 595, 842));
+    {
+        PDFPageContentStreamBuilder content(&builder, PDFContentStreamBuilder::CoordinateSystem::Qt, PDFPageContentStreamBuilder::Mode::Replace);
+        QPainter* painter = content.begin(page);
+        painter->drawImage(QRectF(0, 0, 595, 842), photo);
+        content.end(painter);
+    }
+    const PDFDocument document = builder.build();
+
+    const qint64 originalSize = PDFSizeReducer::getWrittenSize(&document);
+    QVERIFY(originalSize > 0);
+    const PDFDocument email = PDFSizeReducer::reduce(&document, PDFSizeReducer::Preset::Email);
+    const PDFDocument smallest = PDFSizeReducer::reduce(&document, PDFSizeReducer::Preset::Smallest);
+    const qint64 emailSize = PDFSizeReducer::getWrittenSize(&email);
+    const qint64 smallestSize = PDFSizeReducer::getWrittenSize(&smallest);
+    QVERIFY2(emailSize > 0 && emailSize < originalSize / 2, qPrintable(QString("%1 -> %2").arg(originalSize).arg(emailSize)));
+    QVERIFY2(smallestSize <= emailSize, qPrintable(QString("%1 -> %2").arg(emailSize).arg(smallestSize)));
+    QCOMPARE(email.getCatalog()->getPageCount(), size_t(1));
+    QVERIFY(!PDFSizeReducer::getPresetName(PDFSizeReducer::Preset::Print).isEmpty());
 }
 
 QTEST_MAIN(SignatureBuilderTest)

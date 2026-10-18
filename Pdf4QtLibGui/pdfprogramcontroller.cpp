@@ -38,6 +38,9 @@
 #include "pdfrendertoimagesdialog.h"
 #include "pdfoptimizedocumentdialog.h"
 #include "pdfoptimizeimagesdialog.h"
+#include "pdfsizereducer.h"
+#include "pdfdocumentsigner.h"
+#include <QLocale>
 #include "pdfsanitizedocumentdialog.h"
 #include "pdfcreatebitonaldocumentdialog.h"
 #include "pdfocrdocumentdialog.h"
@@ -555,6 +558,10 @@ void PDFProgramController::initialize(Features features,
     if (QAction* action = m_actionManager->getAction(PDFActionManager::Optimize))
     {
         connect(action, &QAction::triggered, this, &PDFProgramController::onActionOptimizeTriggered);
+    }
+    if (QAction* action = m_actionManager->getAction(PDFActionManager::ReduceFileSize))
+    {
+        connect(action, &QAction::triggered, this, &PDFProgramController::onActionReduceFileSizeTriggered);
     }
     if (QAction* action = m_actionManager->getAction(PDFActionManager::OptimizeImages))
     {
@@ -1522,8 +1529,76 @@ void PDFProgramController::onActionRenderToImagesTriggered()
     dialog.exec();
 }
 
+bool PDFProgramController::confirmRewriteOfSignedDocument(const QString& operation)
+{
+    if (!pdf::PDFDocumentSigner::hasExistingSignatures(m_pdfDocument.data()))
+    {
+        return true;
+    }
+
+    return QMessageBox::warning(m_mainWindow, operation,
+                                tr("The document is digitally signed. %1 rewrites the whole document, and its signatures "
+                                   "will no longer be valid. Do it on the unsigned document and sign afterwards.\n\nContinue anyway?").arg(operation),
+                                QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes;
+}
+
+void PDFProgramController::onActionReduceFileSizeTriggered()
+{
+    const QString title = tr("Reduce File Size");
+    if (!confirmRewriteOfSignedDocument(title))
+    {
+        return;
+    }
+
+    const std::array presets = { pdf::PDFSizeReducer::Preset::Email, pdf::PDFSizeReducer::Preset::Smallest, pdf::PDFSizeReducer::Preset::Print };
+    QStringList presetNames;
+    for (pdf::PDFSizeReducer::Preset preset : presets)
+    {
+        presetNames << pdf::PDFSizeReducer::getPresetName(preset);
+    }
+
+    bool ok = false;
+    const QString presetName = QInputDialog::getItem(m_mainWindow, title, tr("Reduce the file for"), presetNames, 0, false, &ok);
+    if (!ok)
+    {
+        return;
+    }
+    const pdf::PDFSizeReducer::Preset preset = presets[presetNames.indexOf(presetName)];
+
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    const qint64 originalSize = pdf::PDFSizeReducer::getWrittenSize(m_pdfDocument.data());
+    pdf::PDFDocumentPointer reduced(new pdf::PDFDocument(pdf::PDFSizeReducer::reduce(m_pdfDocument.data(), preset, m_progress)));
+    const qint64 reducedSize = pdf::PDFSizeReducer::getWrittenSize(reduced.data());
+    QApplication::restoreOverrideCursor();
+
+    if (reducedSize < 0 || originalSize <= 0)
+    {
+        QMessageBox::critical(m_mainWindow, title, tr("The file size could not be reduced."));
+        return;
+    }
+    if (reducedSize >= originalSize)
+    {
+        QMessageBox::information(m_mainWindow, title, tr("The document is already compact (%1), it was left unchanged.").arg(QLocale::system().formattedDataSize(originalSize)));
+        return;
+    }
+
+    const QString message = tr("%1 -> %2 (%3% smaller).\n\nApply? Check the pages afterwards, then save the document.")
+                                .arg(QLocale::system().formattedDataSize(originalSize), QLocale::system().formattedDataSize(reducedSize))
+                                .arg(100 - reducedSize * 100 / originalSize);
+    if (QMessageBox::question(m_mainWindow, title, message, QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes) == QMessageBox::Yes)
+    {
+        pdf::PDFModifiedDocument document(qMove(reduced), m_optionalContentActivity, pdf::PDFModifiedDocument::ModificationFlags(pdf::PDFModifiedDocument::Reset | pdf::PDFModifiedDocument::PreserveUndoRedo));
+        onDocumentModified(qMove(document));
+    }
+}
+
 void PDFProgramController::onActionOptimizeTriggered()
 {
+    if (!confirmRewriteOfSignedDocument(tr("Optimize")))
+    {
+        return;
+    }
+
     PDFOptimizeDocumentDialog dialog(m_pdfDocument.data(), m_mainWindow);
 
     if (dialog.exec() == QDialog::Accepted)
@@ -1536,6 +1611,11 @@ void PDFProgramController::onActionOptimizeTriggered()
 
 void PDFProgramController::onActionOptimizeImagesTriggered()
 {
+    if (!confirmRewriteOfSignedDocument(tr("Optimize Images")))
+    {
+        return;
+    }
+
     PDFOptimizeImagesDialog dialog(m_pdfDocument.data(), m_progress, m_mainWindow);
 
     if (dialog.exec() == QDialog::Accepted)
@@ -1548,6 +1628,11 @@ void PDFProgramController::onActionOptimizeImagesTriggered()
 
 void PDFProgramController::onActionSanitizeTriggered()
 {
+    if (!confirmRewriteOfSignedDocument(tr("Sanitize")))
+    {
+        return;
+    }
+
     PDFSanitizeDocumentDialog dialog(m_pdfDocument.data(), m_mainWindow);
 
     if (dialog.exec() == QDialog::Accepted)
@@ -2087,6 +2172,7 @@ void PDFProgramController::updateActionsAvailability()
     m_actionManager->setEnabled(PDFActionManager::RenderToImages, hasValidDocument && canPrint);
     m_actionManager->setEnabled(PDFActionManager::Optimize, hasValidDocument);
     m_actionManager->setEnabled(PDFActionManager::OptimizeImages, hasValidDocument);
+    m_actionManager->setEnabled(PDFActionManager::ReduceFileSize, hasValidDocument);
     m_actionManager->setEnabled(PDFActionManager::Sanitize, hasValidDocument);
     m_actionManager->setEnabled(PDFActionManager::RemoveExternalLinks, hasValidDocument);
     m_actionManager->setEnabled(PDFActionManager::PageGeometry, hasValidDocument && canModify);

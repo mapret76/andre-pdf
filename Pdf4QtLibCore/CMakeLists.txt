@@ -55,6 +55,8 @@ add_library(Pdf4QtLibCore SHARED
     sources/pdfsignaturelinefinder.h
     sources/pdfcontractpack.cpp
     sources/pdfcontractpack.h
+    sources/pdfsizereducer.cpp
+    sources/pdfsizereducer.h
     sources/pdfsignaturelibrary.cpp
     sources/pdfsignaturelibrary.h
     sources/pdfsignaturestamp.cpp

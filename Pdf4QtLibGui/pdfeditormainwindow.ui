@@ -166,6 +166,7 @@
     <addaction name="actionEncryption"/>
     <addaction name="actionOptimize"/>
     <addaction name="actionOptimizeImages"/>
+    <addaction name="actionReduceFileSize"/>
     <addaction name="separator"/>
     <addaction name="actionSanitize"/>
     <addaction name="actionRemoveExternalLinks"/>
@@ -784,6 +785,18 @@
    </property>
    <property name="statusTip">
     <string>Optimizes document to reduce file size.</string>
+   </property>
+  </action>
+  <action name="actionReduceFileSize">
+   <property name="icon">
+    <iconset resource="pdf4qtlibgui.qrc">
+     <normaloff>:/resources/optimize.svg</normaloff>:/resources/optimize.svg</iconset>
+   </property>
+   <property name="text">
+    <string>&amp;Reduce File Size...</string>
+   </property>
+   <property name="statusTip">
+    <string>Reduces the file size in one step, for e-mail, for the smallest file or for printing. Do it before signing.</string>
    </property>
   </action>
   <action name="actionOptimizeImages">

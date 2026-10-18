@@ -39,7 +39,7 @@ Queue:
 - [x] A6 Phase 3.2: initial every page (chosen slot, position, skip pages)
 - [x] A7 Phase 3.3: find signature lines (existing fields, "Signature"/"Signed" labels, underscores), sign several, checklist; Lock disabled until all are signed; the last one locks (field /Lock /P)
 - [x] A8 Phase 3.4: split a contract pack (by bookmarks / page ranges / detected first pages) + batch initial-sign-lock
-- [ ] A9 Phase 4.1: size reduction before signing (on PDFOptimizer + image optimizer), blocked after the first signature
+- [x] A9 Phase 4.1: size reduction before signing (on PDFOptimizer + image optimizer), blocked after the first signature
 - [ ] A10 Phase 4.2: export to Word (open in M365 Word) and Excel (tables -> .xlsx)
 - [ ] A11 Phase 4.3: Share: Windows Share sheet (email/WhatsApp), mail with attachment
 - [ ] A12 Phase 4.4: highlight/comment polish; contract redline report in DocDiff
@@ -373,3 +373,11 @@ upstream author's machine, not ours).
 - Tests: `contractPack` (split, extract, sign the part with a visible field, check) and
   `packSigningDialog`. **Phase 3 is complete in code.** Its gate (a real three-contract
   pack in Acrobat Reader) waits for Andre.
+
+### 2026-10-18 (night) - autopilot: A9 reduce file size
+- `PDFSizeReducer` (core): presets e-mail (150 dpi, JPEG 75), smallest (110 dpi, JPEG 60),
+  printing (300 dpi, JPEG 85); bitonal scans never below 200 dpi; image optimizer, then
+  every object optimization. Test `sizeReduction` (a phone-scan page more than halves).
+- Editor: Tools -> "Reduce File Size..." picks the preset, shows "before -> after (n%
+  smaller)" and applies on Yes. Optimize, Optimize Images, Sanitize and Reduce File Size
+  warn on a signed document (the rewrite breaks the signatures; default No).

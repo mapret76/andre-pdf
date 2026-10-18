@@ -212,6 +212,7 @@ public:
         BookmarkExport,
         BookmarkImport,
         BookmarkGenerateAutomatically,
+        ReduceFileSize,
         LastAction
     };
 
@@ -382,6 +383,11 @@ private:
     void onActionRenderToImagesTriggered();
     void onActionOptimizeTriggered();
     void onActionOptimizeImagesTriggered();
+    void onActionReduceFileSizeTriggered();
+
+    /// Asks before an operation rewriting the whole document, when it is signed - the
+    /// signatures would not survive it. Returns true, when the operation can go on.
+    bool confirmRewriteOfSignedDocument(const QString& operation);
     void onActionSanitizeTriggered();
     void onActionRemoveExternalLinksTriggered();
     void onActionPageGeometryTriggered();
