@@ -31,6 +31,7 @@
 #include "pdfsignaturestamp.h"
 #include "pdfsignaturelibrary.h"
 #include "pdfpageinitials.h"
+#include "pdfsignaturelinefinder.h"
 #include "pdfrenderer.h"
 #include "pdfcms.h"
 #include "pdffont.h"
@@ -110,6 +111,8 @@ private slots:
     void signatureLibrary();
     void signatureExtraction();
     void initialsOnEveryPage();
+    void signatureLineLabels();
+    void signatureLineFinder();
 
 private:
     static bool createTestCertificate(const QTemporaryDir& directory, PDFCertificateEntry& certificate, QString& password);
@@ -1036,6 +1039,14 @@ void SignatureBuilderTest::initialsOnEveryPage()
     const QImage page2 = render(2, QSize(300, 400));
     QVERIFY(!isRed(page2.pixelColor(250, 400 - 35)));
 
+    // Signature images fitted into areas (signature lines): aspect kept, on the line
+    const PDFPage* uprightPage = document.getCatalog()->getPage(0);
+    QCOMPARE(PDFPageInitials::getFittedDisplayRectangle(uprightPage, QRectF(100, 200, 200, 36), initials.size()), QRectF(100, 200, 72, 36));
+    QCOMPARE(PDFPageInitials::getFittedDisplayRectangle(uprightPage, QRectF(100, 200, 40, 36), initials.size()), QRectF(100, 200, 40, 20));
+    const PDFDocumentPointer drawn = PDFPageInitials::drawImages(&document, initials, { { 0, QRectF(100, 200, 200, 36) }, { 1, QRectF(50, 100, 60, 30) } });
+    QVERIFY(drawn);
+    QVERIFY(!PDFPageInitials::drawImages(&document, initials, { }));
+
     // Every page skipped: nothing to change
     settings.skippedPages = { 0, 1, 2 };
     QVERIFY(!PDFPageInitials::apply(&document, initials, settings));
@@ -1071,6 +1082,86 @@ void SignatureBuilderTest::initialsOnEveryPage()
     const PDFDictionary* fonts = inheritedInitialed->getDictionaryFromObject(inheritedInitialed->getObject(pageResources->get("Font")));
     QVERIFY(fonts && fonts->hasKey("F9"));
     QVERIFY(pageResources->hasKey("XObject"));
+}
+
+void SignatureBuilderTest::signatureLineLabels()
+{
+    QVERIFY(PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Signature:")));
+    QVERIFY(PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Signed by the Seller")));
+    QVERIFY(PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Witness 1")));
+    QVERIFY(PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Handtekening van Koper")));
+    QVERIFY(PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Getuie")));
+    QVERIFY(PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Initials")));
+    QVERIFY(!PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Name of signatory")));
+    QVERIFY(!PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Datum")));
+    QVERIFY(!PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Purchase price")));
+}
+
+void SignatureBuilderTest::signatureLineFinder()
+{
+    PDFDocumentBuilder builder;
+    const PDFObjectReference page1 = builder.appendPage(QRectF(0, 0, 595, 842));
+    const PDFObjectReference page2 = builder.appendPage(QRectF(0, 0, 595, 842));
+    {
+        PDFPageContentStreamBuilder content(&builder, PDFContentStreamBuilder::CoordinateSystem::Qt, PDFPageContentStreamBuilder::Mode::Replace);
+        QPainter* painter = content.begin(page1);
+        QFont font("DejaVu Sans");
+        font.setPixelSize(11);
+        painter->setFont(font);
+        painter->drawText(QPointF(60, 100), QStringLiteral("Signed at Rustenburg on 18 October 2026."));
+        painter->drawText(QPointF(60, 200), QStringLiteral("Signature: ________________________"));
+        painter->drawText(QPointF(60, 240), QStringLiteral("Name: ________________________"));
+        painter->drawText(QPointF(60, 320), QStringLiteral("________________________"));
+        painter->drawText(QPointF(60, 336), QStringLiteral("Witness"));
+        painter->drawText(QPointF(60, 400), QStringLiteral("Date: ______________"));
+        painter->drawText(QPointF(60, 480), QStringLiteral("Handtekening:"));
+        content.end(painter);
+    }
+    {
+        PDFPageContentStreamBuilder content(&builder, PDFContentStreamBuilder::CoordinateSystem::Qt, PDFPageContentStreamBuilder::Mode::Replace);
+        QPainter* painter = content.begin(page2);
+        QFont font("DejaVu Sans");
+        font.setPixelSize(11);
+        painter->setFont(font);
+        painter->drawText(QPointF(60, 700), QStringLiteral("Signature ______________________"));
+        content.end(painter);
+    }
+    // An unsigned signature field over the line of page 2 (y up: 842 - 700 = 142)
+    const PDFObjectReference buyerField = builder.createSignatureField(QStringLiteral("Buyer"), PDFObjectReference(), page2);
+    PDFObjectFactory rectangle;
+    rectangle.beginDictionary();
+    rectangle.beginDictionaryItem("Rect");
+    rectangle << QRectF(60, 140, 180, 40);
+    rectangle.endDictionaryItem();
+    rectangle.endDictionary();
+    builder.mergeTo(buyerField, rectangle.takeObject());
+    const PDFDocument document = builder.build();
+
+    const std::vector<PDFSignatureLineFinder::SignatureLine> lines = PDFSignatureLineFinder::find(&document);
+    QStringList found;
+    for (const auto& line : lines)
+    {
+        found << QString("%1:%2:%3").arg(line.pageIndex).arg(int(line.source)).arg(line.label);
+    }
+    QVERIFY2(lines.size() == size_t(4), qPrintable(found.join(" | ")));
+
+    // Page 1 from the top: the "Signature:" line, the line over "Witness", the label alone
+    QCOMPARE(lines[0].pageIndex, PDFInteger(0));
+    QCOMPARE(lines[0].source, PDFSignatureLineFinder::Source::Line);
+    QVERIFY2(lines[0].label.startsWith(QStringLiteral("Signature")), qPrintable(found.join(" | ")));
+    QVERIFY(qAbs(lines[0].rectangle.top() - (842 - 200)) < 6);     // sits on the baseline
+    QVERIFY(lines[0].rectangle.left() > 100);                     // right of the label
+    QCOMPARE(lines[0].rectangle.height(), PDFSignatureLineFinder::SIGNATURE_HEIGHT);
+
+    QCOMPARE(lines[1].source, PDFSignatureLineFinder::Source::Line);
+    QCOMPARE(lines[1].label, QStringLiteral("Witness"));
+    QCOMPARE(lines[2].source, PDFSignatureLineFinder::Source::Label);
+    QVERIFY(lines[2].rectangle.left() > 100);
+
+    // Page 2: the field, the line under it is the same place
+    QCOMPARE(lines[3].pageIndex, PDFInteger(1));
+    QCOMPARE(lines[3].source, PDFSignatureLineFinder::Source::SignatureField);
+    QCOMPARE(lines[3].fieldName, QStringLiteral("Buyer"));
 }
 
 QTEST_MAIN(SignatureBuilderTest)

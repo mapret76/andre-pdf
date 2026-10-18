@@ -88,6 +88,61 @@ QRectF PDFPageInitials::getDisplayRectangle(const PDFPage* page, QSizeF imageSiz
     return QRectF(x, y, width, height);
 }
 
+QRectF PDFPageInitials::getFittedDisplayRectangle(const PDFPage* page, const QRectF& area, QSizeF imageSize)
+{
+    const QRectF displayArea = getDisplayToPageTransform(page).inverted().mapRect(area);
+    if (imageSize.isEmpty() || displayArea.isEmpty())
+    {
+        return displayArea;
+    }
+
+    const QSizeF size = imageSize.scaled(displayArea.size(), Qt::KeepAspectRatio);
+    return QRectF(displayArea.topLeft(), size);   // y up: topLeft() is the bottom left corner
+}
+
+PDFDocumentPointer PDFPageInitials::drawImages(const PDFDocument* document, const QImage& image, const std::vector<Placement>& placements)
+{
+    if (!document || image.isNull() || placements.empty())
+    {
+        return nullptr;
+    }
+
+    PDFDocumentModifier modifier(document);
+    const PDFCatalog* catalog = document->getCatalog();
+    bool isChanged = false;
+
+    for (const Placement& placement : placements)
+    {
+        const PDFPage* page = catalog->getPage(placement.pageIndex);
+        if (!page)
+        {
+            continue;
+        }
+
+        const QRectF rectangle = getFittedDisplayRectangle(page, placement.area, image.size());
+        PDFPageContentStreamBuilder builder(modifier.getBuilder(), PDFContentStreamBuilder::CoordinateSystem::PDF, PDFPageContentStreamBuilder::Mode::PlaceAfter);
+        QPainter* painter = builder.begin(page->getPageReference());
+        painter->setTransform(getDisplayToPageTransform(page), true);
+        painter->translate(rectangle.left(), rectangle.bottom());
+        painter->scale(1.0, -1.0);
+        painter->drawImage(QRectF(0, 0, rectangle.width(), rectangle.height()), image);
+        builder.end(painter);
+        isChanged = true;
+    }
+
+    if (!isChanged)
+    {
+        return nullptr;
+    }
+
+    modifier.markPageContentsChanged();
+    if (!modifier.finalize())
+    {
+        return nullptr;
+    }
+    return modifier.getDocument();
+}
+
 PDFDocumentPointer PDFPageInitials::apply(const PDFDocument* document, const QImage& image, const Settings& settings)
 {
     if (!document || image.isNull())

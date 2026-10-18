@@ -34,11 +34,14 @@
 #include "signdialog.h"
 #include "signaturelibrarydialog.h"
 #include "initialsdialog.h"
+#include "contractsigningdialog.h"
 
 #include <QtTest>
 #include <QLineEdit>
 #include <QCheckBox>
 #include <QSlider>
+#include <QTableWidget>
+#include <QPushButton>
 #include <QTimer>
 #include <QSettings>
 #include <QComboBox>
@@ -56,6 +59,7 @@ private slots:
     void signatureLibraryDialogs();
     void signatureImageKeepsTransparency();
     void initialsDialog();
+    void contractSigningChecklist();
     void rendering_data();
     void rendering();
     void fallback_data();
@@ -461,6 +465,60 @@ void SignatureAppearanceTest::initialsDialog()
     QTimer::singleShot(0, []() { if (QWidget* box = QApplication::activeModalWidget()) { box->close(); } });
     wrong.accept();
     QVERIFY(wrong.result() != int(QDialog::Accepted));
+}
+
+void SignatureAppearanceTest::contractSigningChecklist()
+{
+    using Decision = pdfplugin::ContractSigningDialog::Decision;
+
+    std::vector<pdf::PDFSignatureLineFinder::SignatureLine> lines(3);
+    for (size_t i = 0; i < lines.size(); ++i)
+    {
+        lines[i].pageIndex = pdf::PDFInteger(i);
+        lines[i].label = QString("Signature %1").arg(i);
+    }
+
+    pdf::PDFSignatureLibrary library;
+    QImage image(10, 10, QImage::Format_ARGB32);
+    image.fill(Qt::black);
+    library.setSlot(0, { QStringLiteral("Andre"), pdf::PDFSignatureLibrary::toPng(image) });
+
+    std::vector<pdf::PDFInteger> shownPages;
+    pdfplugin::ContractSigningDialog dialog(nullptr, lines, library, [&shownPages](pdf::PDFInteger page) { shownPages.push_back(page); });
+    QPushButton* signButton = nullptr;
+    for (QPushButton* button : dialog.findChildren<QPushButton*>())
+    {
+        if (button->text().startsWith("Sign"))
+        {
+            signButton = button;
+        }
+    }
+    QVERIFY(signButton);
+
+    // Nothing decided: cannot sign; every line decided but none by the user: cannot sign
+    QVERIFY(!dialog.isComplete());
+    QVERIFY(!signButton->isEnabled());
+    dialog.setDecision(0, Decision::Sign);
+    dialog.setDecision(1, Decision::OtherParty);
+    QVERIFY(!dialog.isComplete());
+    dialog.setDecision(2, Decision::OtherParty);
+    QVERIFY(dialog.isComplete());
+    QVERIFY(signButton->isEnabled());
+    QCOMPARE(dialog.getDecisions(), (std::vector<Decision>{ Decision::Sign, Decision::OtherParty, Decision::OtherParty }));
+    QCOMPARE(dialog.getSlotIndex(), 0);
+
+    auto* table = dialog.findChild<QTableWidget*>();
+    QVERIFY(table);
+    Q_EMIT table->cellDoubleClicked(2, 1);
+    QCOMPARE(shownPages, (std::vector<pdf::PDFInteger>{ 2 }));
+
+    // Without a signature in the library the contract cannot be signed
+    pdfplugin::ContractSigningDialog empty(nullptr, lines, pdf::PDFSignatureLibrary(), nullptr);
+    for (size_t i = 0; i < lines.size(); ++i)
+    {
+        empty.setDecision(i, Decision::Sign);
+    }
+    QVERIFY(!empty.isComplete());
 }
 
 QTEST_MAIN(SignatureAppearanceTest)

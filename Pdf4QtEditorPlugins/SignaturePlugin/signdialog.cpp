@@ -147,6 +147,15 @@ pdf::PDFDocumentSigner::Certification SignDialog::getCertification() const
     return static_cast<pdf::PDFDocumentSigner::Certification>(ui->certificationCombo->currentData().toInt());
 }
 
+void SignDialog::setCertification(pdf::PDFDocumentSigner::Certification certification)
+{
+    const int index = ui->certificationCombo->findData(int(certification));
+    if (m_canCertify && index != -1)
+    {
+        ui->certificationCombo->setCurrentIndex(index);
+    }
+}
+
 std::optional<QString> SignDialog::getEncryptionPassword() const
 {
     if (!m_canCertify || getSignatureType() == TimestampOnly || !ui->encryptCheckBox->isChecked())

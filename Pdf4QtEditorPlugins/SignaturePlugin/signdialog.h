@@ -77,6 +77,10 @@ public:
     QString getTimestampUrl() const;
     pdf::PDFDocumentSigner::Certification getCertification() const;
 
+    /// Preselects the certification (the contract workflow knows, whether another
+    /// party still signs); ignored, when the document cannot be certified
+    void setCertification(pdf::PDFDocumentSigner::Certification certification);
+
     /// Returns the password needed to open the signed document, when it is to be encrypted
     std::optional<QString> getEncryptionPassword() const;
     const pdf::PDFCertificateEntry* getCertificate() const;

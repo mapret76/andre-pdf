@@ -80,6 +80,21 @@ public:
     /// \param image Image of the initials, transparent background
     /// \param settings Settings
     static PDFDocumentPointer apply(const PDFDocument* document, const QImage& image, const Settings& settings);
+
+    struct Placement
+    {
+        PDFInteger pageIndex = -1;
+        QRectF area;            ///< Area in page coordinates (y up), for example of a signature line
+    };
+
+    /// Returns the rectangle of an image fitted into an area of the page: as large as
+    /// the area allows, the aspect ratio kept, on the bottom left corner of the area
+    /// as displayed (the line the image is signed on). Display coordinates.
+    static QRectF getFittedDisplayRectangle(const PDFPage* page, const QRectF& area, QSizeF imageSize);
+
+    /// Draws the image fitted into each area (signature lines). Returns the modified
+    /// document, or nothing when nothing was drawn.
+    static PDFDocumentPointer drawImages(const PDFDocument* document, const QImage& image, const std::vector<Placement>& placements);
 };
 
 }   // namespace pdf

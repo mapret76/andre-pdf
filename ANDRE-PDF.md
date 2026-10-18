@@ -37,7 +37,7 @@ Queue:
 - [x] A4 Rebrand to "Andre PDF" (window titles, About, installer product name; internal settings ids kept)
 - [x] A5 Phase 3.1: signature library - 4 slots, import from a scanned image (background removed), DPAPI-protected on Windows
 - [x] A6 Phase 3.2: initial every page (chosen slot, position, skip pages)
-- [ ] A7 Phase 3.3: find signature lines (existing fields, "Signature"/"Signed" labels, underscores), sign several, checklist; Lock disabled until all are signed; the last one locks (field /Lock /P)
+- [x] A7 Phase 3.3: find signature lines (existing fields, "Signature"/"Signed" labels, underscores), sign several, checklist; Lock disabled until all are signed; the last one locks (field /Lock /P)
 - [ ] A8 Phase 3.4: split a contract pack (by bookmarks / page ranges / detected first pages) + batch initial-sign-lock
 - [ ] A9 Phase 4.1: size reduction before signing (on PDFOptimizer + image optimizer), blocked after the first signature
 - [ ] A10 Phase 4.2: export to Word (open in M365 Word) and Excel (tables -> .xlsx)
@@ -98,6 +98,7 @@ behind it in [docs/andre/options-report.md](docs/andre/options-report.md).
 | 2026-10-18 | *(autopilot)* Verification stamp = QR code + text; the QR holds plain text (signer, UTC time, lock level, SHA-256 of the certificate, SHA-256 of the file before signing) | Any phone QR scanner shows it, no server needed. The file fingerprint is checkable because the signature is appended to the original bytes. An online "verify" page would need a hosted service, so there is none. |
 | 2026-10-18 | *(autopilot)* "Sign & Lock" is the Sign dialog itself, not a second button: it defaults to certify "no changes", can encrypt first (AES-256, password to open, random owner password that is discarded, permissions follow the lock level), and re-reads the saved file and reports what a reader will find | One dialog, one click, and no duplicate flows to maintain. Encrypting after signing would break the signature, so the order is fixed in code. |
 | 2026-10-18 | *(autopilot)* Signature library = 4 named slots of transparent PNGs, any slot can hold initials; import crops to the ink, removes the paper by an Otsu threshold with a manual slider, keeps or replaces the ink colour; stored in the user profile, DPAPI-encrypted on Windows (plain file with owner-only permissions elsewhere, `ponytail:` noted) | Matches "four signatures scanned from an image". The slider is the calibration knob for real scans and photos. DPAPI ties the file to Andre's Windows account at no cost. |
+| 2026-10-18 | *(autopilot)* Contract signing = the default contract mode of the rules: the library image on every line Andre signs, and **one** certification signature (one PIN) whose visible appearance is the last line, with the stamp. Every found line must be decided ("I sign" / "Other party") before Sign & Lock is enabled; "Other party" lines make the lock P=2 (they can still sign), otherwise P=1 | Requirement 8 ("cannot close until all are signed") becomes "cannot lock until every line is decided", which is enforceable in the workflow. The program window is not stopped from closing. Separate digital signatures per line (field `/Lock`) are deferred until a contract needs them. An existing unsigned signature field gets the image, but the digital signature goes into a new field. |
 | 2026-10-18 | *(autopilot)* Rebrand only the names users see: Andre PDF Editor / Viewer / Pages / Compare, launcher "Andre PDF", installer "Andre PDF" by Andre Pretorius with a new upgrade code; internal application and organisation names stay `PDF4QT ...` / `MelkaJ` | Settings and the OCR model folders are keyed on the internal names. The new upgrade code installs alongside an upstream PDF4QT install instead of replacing it. |
 
 ## Roadmap
@@ -341,3 +342,14 @@ upstream author's machine, not ours).
 - Plugin: "Initial All Pages..." (choose the slot, position, width/margin in mm, skip the
   last page by default, skip a page list), refused on an already signed document.
   Test `initialsDialog`.
+
+### 2026-10-18 (night) - autopilot: A7 contract signing
+- `PDFSignatureLineFinder` (core): unsigned signature fields (page through `/P` or the page
+  `/Annots`), underscore/dot runs labelled as a signature on the same line or by the
+  nearest line under/over it (English and Afrikaans, name/date/place lines excluded),
+  a "Signature:" label ending a line; lines under a field merge with it; ordered top-down.
+  Tests `signatureLineLabels`, `signatureLineFinder` (real text written by Qt's PDF writer).
+- `PDFPageInitials::drawImages` / `getFittedDisplayRectangle`: an image fitted onto lines.
+- Plugin "Sign Contract...": the checklist dialog (`ContractSigningDialog`, double-click
+  shows the page, "I sign all"), images on the lines, the last line in the scene, then the
+  Sign dialog with the lock level preset. Test `contractSigningChecklist`.

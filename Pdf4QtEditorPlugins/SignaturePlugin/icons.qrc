@@ -24,5 +24,6 @@
         <file>signature-slot-4.svg</file>
         <file>signature-library.svg</file>
         <file>initial-pages.svg</file>
+        <file>sign-contract.svg</file>
     </qresource>
 </RCC>

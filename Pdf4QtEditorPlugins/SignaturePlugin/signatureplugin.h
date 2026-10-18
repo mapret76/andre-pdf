@@ -24,6 +24,7 @@
 #define SIGNATURESPLUGIN_H
 
 #include "pdfsignaturelibrary.h"
+#include "pdfdocumentsigner.h"
 #include "pdfplugin.h"
 #include "pdfpagecontentelements.h"
 #include "pdfpagecontenteditortools.h"
@@ -66,6 +67,7 @@ private:
     void onSceneActivityChanged();
     void onOpenSignatureLibrary();
     void onInitialPages();
+    void onSignContract();
 
     void onPenChanged(const QPen& pen);
     void onBrushChanged(const QBrush& brush);
@@ -97,6 +99,7 @@ private:
         SignatureSlot4,
         SignatureLibrary,
         InitialPages,
+        SignContract,
         Clear,
 
         // Sign actions
@@ -149,6 +152,9 @@ private:
 
     pdf::PDFPageContentScene m_scene;
     pdf::PDFSignatureLibrary m_signatureLibrary;
+
+    /// Certification proposed to the next Sign dialog by the contract workflow
+    std::optional<pdf::PDFDocumentSigner::Certification> m_suggestedCertification;
     bool m_sceneSelectionChangeEnabled;
 };
 

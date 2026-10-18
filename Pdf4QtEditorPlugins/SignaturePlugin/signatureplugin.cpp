@@ -32,6 +32,8 @@
 #include "pdfsignaturestamp.h"
 #include "signaturelibrarydialog.h"
 #include "initialsdialog.h"
+#include "contractsigningdialog.h"
+#include "pdfsignaturelinefinder.h"
 #include "pdfpageinitials.h"
 
 #include <QBuffer>
@@ -89,6 +91,9 @@ void SignaturePlugin::setWidget(pdf::PDFWidget* widget)
     QAction* initialPagesAction = new QAction(QIcon(":/pdfplugins/signatureplugin/initial-pages.svg"), tr("&Initial All Pages..."), this);
     initialPagesAction->setObjectName("signaturetool_initialPagesAction");
     m_actions[InitialPages] = initialPagesAction;
+    QAction* signContractAction = new QAction(QIcon(":/pdfplugins/signatureplugin/sign-contract.svg"), tr("Sign &Contract..."), this);
+    signContractAction->setObjectName("signaturetool_signContractAction");
+    m_actions[SignContract] = signContractAction;
     QAction* clearAction = new QAction(QIcon(":/pdfplugins/signatureplugin/clear.svg"), tr("Clear All &Graphics"), this);
     QAction* signElectronicallyAction = new QAction(QIcon(":/pdfplugins/signatureplugin/sign-electronically.svg"), tr("Sign &Electronically"), this);
     QAction* signDigitallyAction = new QAction(QIcon(":/pdfplugins/signatureplugin/sign-digitally.svg"), tr("Sign Digitally &With Certificate"), this);
@@ -200,6 +205,7 @@ void SignaturePlugin::setWidget(pdf::PDFWidget* widget)
     connect(certificatesAction, &QAction::triggered, this, &SignaturePlugin::onOpenCertificatesManager);
     connect(signatureLibraryAction, &QAction::triggered, this, &SignaturePlugin::onOpenSignatureLibrary);
     connect(initialPagesAction, &QAction::triggered, this, &SignaturePlugin::onInitialPages);
+    connect(signContractAction, &QAction::triggered, this, &SignaturePlugin::onSignContract);
     connect(m_widget, &pdf::PDFWidget::sceneActivityChanged, this, &SignaturePlugin::onSceneActivityChanged);
 
     updateActions();
@@ -226,6 +232,7 @@ std::vector<QAction*> SignaturePlugin::getActions() const
     result.push_back(m_actions[Certificates]);
     result.push_back(m_actions[SignatureLibrary]);
     result.push_back(m_actions[InitialPages]);
+    result.push_back(m_actions[SignContract]);
 
     return result;
 }
@@ -371,6 +378,11 @@ void SignaturePlugin::onSignDigitally()
     }
 
     SignDialog dialog(m_dataExchangeInterface->getMainWindow(), m_scene.isEmpty(), !pdf::PDFDocumentSigner::hasExistingSignatures(m_document));
+    if (m_suggestedCertification)
+    {
+        dialog.setCertification(*m_suggestedCertification);
+        m_suggestedCertification.reset();
+    }
     if (dialog.exec() == SignDialog::Accepted)
     {
         const SignDialog::SignatureType signatureType = dialog.getSignatureType();
@@ -704,6 +716,87 @@ void SignaturePlugin::onInitialPages()
     Q_EMIT m_widget->getToolManager()->documentModified(pdf::PDFModifiedDocument(document, nullptr, flags));
 }
 
+void SignaturePlugin::onSignContract()
+{
+    Q_ASSERT(m_document);
+
+    if (pdf::PDFDocumentSigner::hasExistingSignatures(m_document))
+    {
+        QMessageBox::information(m_widget, tr("Sign Contract"),
+                                 tr("The document is already signed by another party. Place your signature with the Place Signature tools "
+                                    "and add your signature with Sign Digitally - the existing signatures stay valid."));
+        return;
+    }
+
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    std::vector<pdf::PDFSignatureLineFinder::SignatureLine> lines = pdf::PDFSignatureLineFinder::find(m_document);
+    QApplication::restoreOverrideCursor();
+
+    if (lines.empty())
+    {
+        QMessageBox::information(m_widget, tr("Sign Contract"),
+                                 tr("No signature lines were found. Place your signature with the Place Signature tools and sign with Sign Digitally."));
+        return;
+    }
+
+    pdf::PDFDrawWidgetProxy* proxy = m_widget->getDrawWidgetProxy();
+    ContractSigningDialog dialog(m_dataExchangeInterface->getMainWindow(), std::move(lines), m_signatureLibrary, [proxy](pdf::PDFInteger pageIndex) { proxy->goToPage(pageIndex); });
+    if (dialog.exec() != QDialog::Accepted || !dialog.isComplete())
+    {
+        return;
+    }
+
+    QImage signature;
+    signature.loadFromData(m_signatureLibrary.getSlot(dialog.getSlotIndex()).png, "PNG");
+
+    std::vector<pdf::PDFPageInitials::Placement> placements;
+    bool isOtherPartySigning = false;
+    const std::vector<ContractSigningDialog::Decision> decisions = dialog.getDecisions();
+    for (size_t i = 0; i < decisions.size(); ++i)
+    {
+        if (decisions[i] == ContractSigningDialog::Decision::Sign)
+        {
+            placements.push_back({ dialog.getLines()[i].pageIndex, dialog.getLines()[i].rectangle });
+        }
+        isOtherPartySigning = isOtherPartySigning || decisions[i] == ContractSigningDialog::Decision::OtherParty;
+    }
+
+    // The image of the last line is the visible appearance of the digital signature,
+    // with the verification stamp; the other lines get the image into the page.
+    const pdf::PDFPageInitials::Placement lastPlacement = placements.back();
+    placements.pop_back();
+    if (!placements.empty())
+    {
+        pdf::PDFDocumentPointer document = pdf::PDFPageInitials::drawImages(m_document, signature, placements);
+        if (!document)
+        {
+            QMessageBox::critical(m_widget, tr("Sign Contract"), tr("The signature could not be placed on the lines."));
+            return;
+        }
+
+        pdf::PDFModifiedDocument::ModificationFlags flags;
+        flags.setFlag(pdf::PDFModifiedDocument::PageContents);
+        Q_EMIT m_widget->getToolManager()->documentModified(pdf::PDFModifiedDocument(document, nullptr, flags));
+    }
+
+    setActive(true);
+    m_scene.clear();
+    const pdf::PDFPage* lastPage = m_document->getCatalog()->getPage(lastPlacement.pageIndex);
+    pdf::PDFPageContentImageElement* element = new pdf::PDFPageContentImageElement();
+    element->setPageIndex(lastPlacement.pageIndex);
+    // ponytail: the scene draws in unrotated page space, so on a page turned by /Rotate
+    // the last signature is drawn turned with it; route it through PDFPageInitials if
+    // rotated contracts turn up.
+    element->setRectangle(pdf::PDFPageInitials::getDisplayToPageTransform(lastPage).mapRect(pdf::PDFPageInitials::getFittedDisplayRectangle(lastPage, lastPlacement.area, signature.size())));
+    element->setContent(m_signatureLibrary.getSlot(dialog.getSlotIndex()).png);
+    m_scene.addElement(element);
+
+    // Another party still signs: certify so that signing stays allowed (P = 2)
+    m_suggestedCertification = isOtherPartySigning ? pdf::PDFDocumentSigner::Certification::FormFilling : pdf::PDFDocumentSigner::Certification::NoChanges;
+    onSignDigitally();
+    m_suggestedCertification.reset();
+}
+
 void SignaturePlugin::updateSignatureSlots()
 {
     for (int i = 0; i < pdf::PDFSignatureLibrary::SLOT_COUNT; ++i)
@@ -845,6 +938,7 @@ void SignaturePlugin::updateActions()
 
         m_actions[SignDigitally]->setEnabled(m_document && m_widget && !m_widget->isAnySceneActive(&m_scene));
         m_actions[InitialPages]->setEnabled(m_document && m_widget && !m_widget->isAnySceneActive(&m_scene));
+        m_actions[SignContract]->setEnabled(m_document && m_widget && !m_widget->isAnySceneActive(&m_scene));
         return;
     }
 
@@ -863,6 +957,7 @@ void SignaturePlugin::updateActions()
     }
     m_actions[SignatureLibrary]->setEnabled(true);
     m_actions[InitialPages]->setEnabled(m_document);
+    m_actions[SignContract]->setEnabled(m_document);
 
     // Clear action
     QAction* clearAction = m_actions[Clear];
