@@ -45,6 +45,43 @@ Andre can test himself.
 - The visible stamp proves nothing by itself; the label says "electronic
   signature" unless the certificate is from an SAAA-accredited provider (ECT Act).
 
+## Phase 2 design notes (Sign & Lock)
+
+Starting point, read from the code on 2026-10-18:
+
+- `PDFDocumentSigner` (`Pdf4QtLibCore/sources/pdfdocumentsigner.h`) already
+  writes every new signature as an incremental update, verifies it before
+  returning, and grows the reserved space when needed. Multiple signatures are
+  covered by `UnitTestsSignatureBuilder`.
+- The Signature plugin's `SignDialog` offers visible/invisible signatures,
+  signature + RFC 3161 timestamp, and document timestamps; certificates come
+  from `PDFCertificateManager` (Windows `MY` store via `signImpl_Win`, or .pfx).
+- DocMDP is only *read* (`pdfsignaturehandler.cpp`, and honoured by
+  `PDFOCRApplyProcessor`). Nothing writes `/Reference` or the catalog `/Perms`.
+
+Planned changes, in order:
+
+1. `PDFDocumentSigner::Parameters` gains a certification level (none = approval
+   signature, or DocMDP P = 1 / 2 / 3). When set, the signature dictionary gets
+   `/Reference [<< /Type /SigRef /TransformMethod /DocMDP /TransformParams
+   << /Type /TransformParams /P n /V /1.2 >> >>]` and the catalog gets
+   `/Perms << /DocMDP <sig dict> >>`. Refuse certification when the document
+   already has a signature (ISO 32000-2 12.8.2.2: certification must be first).
+   Unit tests in `UnitTestsSignatureBuilder`; manual check in Acrobat Reader.
+2. "Lock on signing" for the last of several signature lines: the signature
+   field's `/Lock` dictionary with `/P` (PDF 2.0 FieldMDP + DocMDP), so the
+   final signature closes the document.
+3. `SignDialog`: a "Certify: no changes / form filling / comments" choice,
+   defaulting to "no changes" for a single signature.
+4. Verification stamp: signer, date/time, SHA-256 prefix of the document and a
+   QR code, drawn into the visible appearance.
+5. One "Sign & Lock" action: optional size reduction and encryption first, then
+   certify, then re-open and verify.
+
+Acceptance: Acrobat Reader (free) shows the document as certified with the
+chosen permission, and an edit made afterwards in another tool is reported as
+a violation.
+
 ## Building
 
 **Windows installer (the deliverable):** GitHub Actions workflow
@@ -77,3 +114,11 @@ upstream author's machine, not ours).
 - Forked PDF4QT at upstream `905cefa` as `mapret76/andre-pdf`, cloned to the vault, `upstream` remote added, Actions enabled on the fork.
 - Found that upstream already ships: a Windows MSI/MSIX workflow, Tesseract OCR with built-in `fast` models in the installer, `PDFDocumentSigner` with multiple incremental signatures (tested by `UnitTestsSignatureBuilder`), RFC 3161 timestamps (`UnitTestsTimestamp`), and DocMDP *parsing* in `pdfsignaturehandler.cpp`. Creating DocMDP certification is the first real gap for Phase 2.
 - Started the first Windows_MSI run on the unmodified fork to prove the pipeline.
+- First Windows_MSI run **succeeded** (run 39118485205, 71 min): MSI 54.1 MB
+  (SHA-256 `62c9f12d...929482`), MSIX and a zip. Contents checked: Editor, Viewer,
+  PageMaster, Diff, LaunchPad, PdfTool, SignaturePlugin, Tesseract 5.5 +
+  Leptonica, built-in `fast` OCR models (eng, deu, spa, rus, ces, slk, chi_*,
+  osd; **no Afrikaans** built in - downloadable in the OCR language dialog).
+  The Linux CI run on the ledger commit also passed (53 min, includes tests).
+- Gate for Phase 1 is now with Andre: install the MSI on his PC (unsigned, so
+  SmartScreen warns: More info -> Run anyway) and open his own PDFs.
