@@ -8,6 +8,30 @@ This file is the project ledger: decisions, the roadmap, and a dated progress
 log. Keep it current in the same commit as the work it describes. It is never
 git-ignored.
 
+## Requirements (as Andre stated them, 2026-10-17/18)
+
+1. Installs on the Windows desktop.
+2. OCR, then edit text in the original font.
+3. Add images, text boxes and signatures, saved into the PDF.
+4. Digitally sign with his personal certificate (selectable), with a visible box
+   that lets a reader verify authenticity.
+5. Lock the PDF afterwards.
+6. Four signatures scanned from an image, kept for reuse.
+7. Initial every page of a contract.
+8. Sign several signature lines in one PDF (contract packs arrive as one file);
+   the document cannot be closed until every line is signed.
+9. Split a PDF into separate files that are each signed on their own.
+10. Highlight and remove highlights; add comments; save with both kept on top.
+11. Reduce the size of a PDF.
+12. Export to Microsoft Word and Microsoft Excel.
+13. Share the document by email or WhatsApp.
+14. Compare files.
+15. An Android version of the same app.
+
+Priority: contract signing first. The mapping of each requirement to a phase is
+in the Claude skill (`docs/andre/claude-skill/SKILL.md`, §1) and the full research
+behind it in [docs/andre/options-report.md](docs/andre/options-report.md).
+
 ## Decisions (and why)
 
 | Date | Decision | Why |
@@ -106,7 +130,8 @@ upstream author's machine, not ours).
 
 - Working copy: vault `~/projects/andre-pdf`
 - Remotes: `origin` = github.com/mapret76/andre-pdf (public fork, second copy off the vault), `upstream` = github.com/JakubMelka/PDF4QT
-- Options report: Claude Docs, "Free Acrobat-Pro Alternative — Options Report" (Andre's private doc)
+- Options report: [docs/andre/options-report.md](docs/andre/options-report.md) (markdown export of Andre's private Claude Doc "Free Acrobat-Pro Alternative — Options Report", rev 27; the two diagrams are not in the export)
+- Claude skill: `~/.claude/skills/andre-pdf/SKILL.md` on the vault and the PC (kept in step with `~/.claude/tools/sync-claude-skills.sh`, run from the PC). A copy lives in [docs/andre/claude-skill/SKILL.md](docs/andre/claude-skill/SKILL.md) for history: when you edit the skill, copy it here in the same commit.
 
 ## Progress log
 
@@ -122,3 +147,9 @@ upstream author's machine, not ours).
   The Linux CI run on the ledger commit also passed (53 min, includes tests).
 - Gate for Phase 1 is now with Andre: install the MSI on his PC (unsigned, so
   SmartScreen warns: More info -> Run anyway) and open his own PDFs.
+- Wrote the `andre-pdf` Claude skill (stable knowledge: requirements map, build,
+  signing rules, roadmap, hard lines, access traps) and synced it to the vault.
+  Exported the options report into `docs/andre/`. Next session resumes in the
+  vault: start with the skill, then this ledger. **Open:** Andre's install test
+  of the Phase 1 MSI; then Phase 2 step 1 (certification level in
+  `PDFDocumentSigner`), which wants a local vault build set up first.
