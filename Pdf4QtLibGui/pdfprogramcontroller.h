@@ -215,6 +215,7 @@ public:
         ReduceFileSize,
         ExportToWord,
         ExportToExcel,
+        Share,
         LastAction
     };
 
@@ -388,6 +389,7 @@ private:
     void onActionReduceFileSizeTriggered();
     void onActionExportToWordTriggered();
     void onActionExportToExcelTriggered();
+    void onActionShareTriggered();
 
     /// Asks for the file of an export, the name of the document with the suffix
     QString getExportFileName(const QString& title, const QString& suffix, const QString& filter);

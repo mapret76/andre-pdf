@@ -40,6 +40,7 @@
 #include "pdfoptimizeimagesdialog.h"
 #include "pdfsizereducer.h"
 #include "pdfofficeexporter.h"
+#include "pdfsharesheet.h"
 #include "pdfdocumentsigner.h"
 #include <QLocale>
 #include "pdfsanitizedocumentdialog.h"
@@ -564,6 +565,10 @@ void PDFProgramController::initialize(Features features,
     if (QAction* action = m_actionManager->getAction(PDFActionManager::Optimize))
     {
         connect(action, &QAction::triggered, this, &PDFProgramController::onActionOptimizeTriggered);
+    }
+    if (QAction* action = m_actionManager->getAction(PDFActionManager::Share))
+    {
+        connect(action, &QAction::triggered, this, &PDFProgramController::onActionShareTriggered);
     }
     if (QAction* action = m_actionManager->getAction(PDFActionManager::ExportToWord))
     {
@@ -1613,6 +1618,29 @@ QString PDFProgramController::getExportFileName(const QString& title, const QStr
     return QFileDialog::getSaveFileName(m_mainWindow, title, proposed, filter);
 }
 
+void PDFProgramController::onActionShareTriggered()
+{
+    const QString title = tr("Share");
+    if (!QFile::exists(m_fileInfo.originalFileName))
+    {
+        QMessageBox::information(m_mainWindow, title, tr("Save the document first, the saved file is shared."));
+        return;
+    }
+
+    QString shareTitle = m_pdfDocument->getInfo()->title;
+    if (shareTitle.isEmpty())
+    {
+        shareTitle = m_fileInfo.fileName;
+    }
+
+    if (!PDFShareSheet::share(m_mainWindow, m_fileInfo.originalFileName, shareTitle))
+    {
+        // No share sheet: the folder of the file is shown, the file can be dragged from it
+        QMessageBox::information(m_mainWindow, title, tr("The share sheet is not available here. The folder of the file opens, drag the file into the app to share it with."));
+        QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(m_fileInfo.originalFileName).absolutePath()));
+    }
+}
+
 void PDFProgramController::onActionExportToWordTriggered()
 {
     const QString title = tr("Export to Word");
@@ -2269,6 +2297,7 @@ void PDFProgramController::updateActionsAvailability()
     m_actionManager->setEnabled(PDFActionManager::ReduceFileSize, hasValidDocument);
     m_actionManager->setEnabled(PDFActionManager::ExportToWord, hasValidDocument);
     m_actionManager->setEnabled(PDFActionManager::ExportToExcel, hasValidDocument);
+    m_actionManager->setEnabled(PDFActionManager::Share, hasValidDocument);
     m_actionManager->setEnabled(PDFActionManager::Sanitize, hasValidDocument);
     m_actionManager->setEnabled(PDFActionManager::RemoveExternalLinks, hasValidDocument);
     m_actionManager->setEnabled(PDFActionManager::PageGeometry, hasValidDocument && canModify);

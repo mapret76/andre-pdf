@@ -35,6 +35,7 @@
     <addaction name="actionSave_As"/>
     <addaction name="separator"/>
     <addaction name="actionSend_by_E_Mail"/>
+    <addaction name="actionShare"/>
     <addaction name="actionPrint"/>
     <addaction name="actionRender_to_Images"/>
     <addaction name="actionExportToWord"/>
@@ -787,6 +788,14 @@
    </property>
    <property name="statusTip">
     <string>Optimizes document to reduce file size.</string>
+   </property>
+  </action>
+  <action name="actionShare">
+   <property name="text">
+    <string>S&amp;hare...</string>
+   </property>
+   <property name="statusTip">
+    <string>Shares the saved file with an app: e-mail, WhatsApp, Teams or nearby sharing.</string>
    </property>
   </action>
   <action name="actionExportToWord">

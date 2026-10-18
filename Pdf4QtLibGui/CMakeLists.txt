@@ -43,6 +43,8 @@ add_library(Pdf4QtLibGui SHARED
     pdfrendertoimagesdialog.h
     pdfsendmail.cpp
     pdfsendmail.h
+    pdfsharesheet.cpp
+    pdfsharesheet.h
     pdfsidebarwidget.cpp
     pdfsidebarwidget.h
     pdftexttospeech.cpp
@@ -111,6 +113,11 @@ GENERATE_EXPORT_HEADER(Pdf4QtLibGui
                        EXPORT_FILE_NAME "${CMAKE_BINARY_DIR}/${INSTALL_INCLUDEDIR}/pdf4qtlibgui_export.h")
 
 target_link_libraries(Pdf4QtLibGui PRIVATE Pdf4QtLibCore Pdf4QtLibWidgets Qt6::Core Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::TextToSpeech Qt6::Xml Qt6::Svg)
+
+if(MSVC)
+    # Windows Runtime (C++/WinRT) for the share sheet
+    target_link_libraries(Pdf4QtLibGui PRIVATE WindowsApp)
+endif()
 # OCR engine adapter is optional; without it, the OCR dialog works with saved projects only
 if(PDF4QT_ENABLE_OCR)
     target_link_libraries(Pdf4QtLibGui PRIVATE Pdf4QtOcrTesseract)

@@ -41,7 +41,7 @@ Queue:
 - [x] A8 Phase 3.4: split a contract pack (by bookmarks / page ranges / detected first pages) + batch initial-sign-lock
 - [x] A9 Phase 4.1: size reduction before signing (on PDFOptimizer + image optimizer), blocked after the first signature
 - [x] A10 Phase 4.2: export to Word (open in M365 Word) and Excel (tables -> .xlsx)
-- [ ] A11 Phase 4.3: Share: Windows Share sheet (email/WhatsApp), mail with attachment
+- [x] A11 Phase 4.3: Share: Windows Share sheet (email/WhatsApp), mail with attachment
 - [ ] A12 Phase 4.4: highlight/comment polish; contract redline report in DocDiff
 - [ ] A13 Phase 6: font identification, installed check, find/download/install, embed
 - [ ] A14 Phase 5: Android - Pdf4QtLibCore on arm64 in CI, then Qt Quick viewer + sign with .pfx, APK from CI
@@ -391,3 +391,12 @@ upstream author's machine, not ours).
   with Python's zipfile and XML parser.
 - Editor: File -> "Export to Word..." (Windows: "Open in Word" when Word is registered
   under App Paths, else the text export) and "Export to Excel...", both open the result.
+
+### 2026-10-18 (night) - autopilot: A11 share
+- E-mail with the file attached already existed (File -> Send by E-Mail, Simple MAPI:
+  Outlook or the default mail program).
+- New File -> "Share..." opens the Windows share sheet (`PDFShareSheet`, C++/WinRT,
+  `IDataTransferManagerInterop::ShowShareUIForWindow`, the file as a storage item).
+  WhatsApp Desktop, Teams, Outlook and nearby sharing appear there when installed.
+  `WindowsApp` is linked on MSVC. Without C++/WinRT (other systems, MinGW) the folder of
+  the file opens instead. It compiles only on Windows: checked by the Windows MSI build.
