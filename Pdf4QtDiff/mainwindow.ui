@@ -56,6 +56,7 @@
     </property>
     <addaction name="actionCompare"/>
     <addaction name="actionCreate_Compare_Report"/>
+    <addaction name="actionCreate_Redline_Report"/>
     <addaction name="actionSave_Differences_to_XML"/>
    </widget>
    <widget class="QMenu" name="menuView">
@@ -193,6 +194,18 @@
    </property>
    <property name="text">
     <string>Create Compare &amp;Report...</string>
+   </property>
+  </action>
+  <action name="actionCreate_Redline_Report">
+   <property name="icon">
+    <iconset resource="resources.qrc">
+     <normaloff>:/pdfdiff/resources/create-compare-report.svg</normaloff>:/pdfdiff/resources/create-compare-report.svg</iconset>
+   </property>
+   <property name="text">
+    <string>Create &amp;Redline Report...</string>
+   </property>
+   <property name="toolTip">
+    <string>Lists every word deleted, inserted or replaced between the two versions of a contract, in context</string>
    </property>
   </action>
   <action name="actionFilter_Text">

@@ -388,7 +388,6 @@ std::vector<PDFDependentLibraryInfo> PDFDependentLibraryInfo::getLibraryInfo()
 #ifdef Q_OS_WIN
         { "AsmJit", "zlib", "https://asmjit.com/" },
         { "hwloc", "BSD-3-Clause", "https://www.open-mpi.org/projects/hwloc/" },
-        { "libspng", "BSD-2-Clause", "https://libspng.org/" },
         { "libtiff", "libtiff (BSD-style)", "https://libtiff.gitlab.io/libtiff/" },
         { "giflib", "MIT", "https://giflib.sourceforge.net/" },
         { "libwebp", "BSD-3-Clause", "https://chromium.googlesource.com/webm/libwebp" },

@@ -20,6 +20,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+#include "pdftextredline.h"
+#include <QUrl>
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 
@@ -107,6 +109,7 @@ MainWindow::MainWindow(QWidget* parent) :
     ui->actionPrevious_Difference->setData(int(Operation::PreviousDifference));
     ui->actionNext_Difference->setData(int(Operation::NextDifference));
     ui->actionCreate_Compare_Report->setData(int(Operation::CreateCompareReport));
+    ui->actionCreate_Redline_Report->setData(int(Operation::CreateRedlineReport));
     ui->actionFilter_Text->setData(int(Operation::FilterText));
     ui->actionFilter_Vector_Graphics->setData(int(Operation::FilterVectorGraphics));
     ui->actionFilter_Images->setData(int(Operation::FilterImages));
@@ -137,6 +140,7 @@ MainWindow::MainWindow(QWidget* parent) :
     mainToolbar->addSeparator();
     mainToolbar->addAction(ui->actionCompare);
     mainToolbar->addAction(ui->actionCreate_Compare_Report);
+    mainToolbar->addAction(ui->actionCreate_Redline_Report);
     mainToolbar->addAction(ui->actionSave_Differences_to_XML);
 
     QToolBar* differencesToolbar = addToolBar(tr("&Differences"));
@@ -443,6 +447,10 @@ bool MainWindow::canPerformOperation(Operation operation) const
         case Operation::DisplayMarkers:
             return true;
 
+        case Operation::CreateRedlineReport:
+            return m_leftDocument.getCatalog() && m_rightDocument.getCatalog() &&
+                   m_leftDocument.getCatalog()->getPageCount() > 0 && m_rightDocument.getCatalog()->getPageCount() > 0;
+
         default:
             Q_ASSERT(false);
             break;
@@ -465,6 +473,7 @@ void MainWindow::performOperation(Operation operation)
             {
                 clear(true, false);
                 setLeftDocument(std::move(*document));
+                m_leftFileName = m_openedFileName;
                 updateViewDocument();
             }
 
@@ -481,6 +490,7 @@ void MainWindow::performOperation(Operation operation)
             {
                 clear(false, true);
                 setRightDocument(std::move(*document));
+                m_rightFileName = m_openedFileName;
                 updateViewDocument();
             }
 
@@ -646,6 +656,33 @@ void MainWindow::performOperation(Operation operation)
                 }
             }
 
+            break;
+        }
+
+        case Operation::CreateRedlineReport:
+        {
+            // The redline compares the text word by word, whatever the page layout,
+            // the left document is the old version
+            QApplication::setOverrideCursor(Qt::WaitCursor);
+            const pdf::PDFTextRedline::Changes changes = pdf::PDFTextRedline::compare(pdf::PDFTextRedline::getWords(&m_leftDocument), pdf::PDFTextRedline::getWords(&m_rightDocument));
+            pdf::PDFDocument report = pdf::PDFTextRedline::createReport(changes, m_leftFileName.isEmpty() ? tr("left document") : m_leftFileName,
+                                                                        m_rightFileName.isEmpty() ? tr("right document") : m_rightFileName);
+            QApplication::restoreOverrideCursor();
+
+            const QString saveFileName = QFileDialog::getSaveFileName(this, tr("Save Redline Report"), m_settings.directory + "/" + tr("Redline.pdf"), tr("Portable Document (*.pdf);;All files (*.*)"));
+            if (!saveFileName.isEmpty())
+            {
+                pdf::PDFDocumentWriter writer(m_progress);
+                const pdf::PDFOperationResult result = writer.write(saveFileName, &report, QFile::exists(saveFileName));
+                if (!result)
+                {
+                    QMessageBox::critical(this, tr("Error"), result.getErrorMessage());
+                }
+                else
+                {
+                    QDesktopServices::openUrl(QUrl::fromLocalFile(saveFileName));
+                }
+            }
             break;
         }
 
@@ -829,6 +866,7 @@ std::optional<pdf::PDFDocument> MainWindow::openDocument()
 
     // Mark current directory as this
     QFileInfo fileInfo(fileName);
+    m_openedFileName = fileInfo.fileName();
     m_settings.directory = fileInfo.dir().absolutePath();
 
     // Try to open a new document

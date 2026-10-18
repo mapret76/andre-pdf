@@ -59,6 +59,8 @@ add_library(Pdf4QtLibCore SHARED
     sources/pdfsizereducer.h
     sources/pdfofficeexporter.cpp
     sources/pdfofficeexporter.h
+    sources/pdftextredline.cpp
+    sources/pdftextredline.h
     sources/pdfsignaturelibrary.cpp
     sources/pdfsignaturelibrary.h
     sources/pdfsignaturestamp.cpp

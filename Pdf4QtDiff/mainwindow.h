@@ -83,7 +83,8 @@ public:
         ShowPageswithDifferences,
         SaveDifferencesToXML,
         DisplayDifferences,
-        DisplayMarkers
+        DisplayMarkers,
+        CreateRedlineReport
     };
 
     virtual void showEvent(QShowEvent* event) override;
@@ -151,6 +152,9 @@ private:
 
     pdf::PDFDocument m_leftDocument;
     pdf::PDFDocument m_rightDocument;
+    QString m_openedFileName;   ///< File of the document opened last
+    QString m_leftFileName;
+    QString m_rightFileName;
     pdf::PDFDocument m_combinedDocument;
 
     pdf::PDFDiffResult m_diffResult;

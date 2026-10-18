@@ -42,7 +42,7 @@ Queue:
 - [x] A9 Phase 4.1: size reduction before signing (on PDFOptimizer + image optimizer), blocked after the first signature
 - [x] A10 Phase 4.2: export to Word (open in M365 Word) and Excel (tables -> .xlsx)
 - [x] A11 Phase 4.3: Share: Windows Share sheet (email/WhatsApp), mail with attachment
-- [ ] A12 Phase 4.4: highlight/comment polish; contract redline report in DocDiff
+- [x] A12 Phase 4.4: highlight/comment polish; contract redline report in DocDiff
 - [ ] A13 Phase 6: font identification, installed check, find/download/install, embed
 - [ ] A14 Phase 5: Android - Pdf4QtLibCore on arm64 in CI, then Qt Quick viewer + sign with .pfx, APK from CI
 - [ ] A15 Phase 7: scan-font engine
@@ -400,3 +400,16 @@ upstream author's machine, not ours).
   WhatsApp Desktop, Teams, Outlook and nearby sharing appear there when installed.
   `WindowsApp` is linked on MSVC. Without C++/WinRT (other systems, MinGW) the folder of
   the file opens instead. It compiles only on Windows: checked by the Windows MSI build.
+
+### 2026-10-18 (night) - autopilot: A12 comments and redline
+- Highlights (add/remove), comments and their replies are upstream PDF4QT annotation
+  tools with appearance streams, so other readers show them, and they are covered by its
+  annotation test suites. Nothing needed changing. Deleting a highlight is Delete
+  Annotation.
+- `PDFTextRedline` (core): word diff (Myers O(ND), common prefix/suffix skipped, limit of
+  6000 edits) of the text of two versions; changes are deleted / inserted / replaced, with
+  the pages and six words of context; a report PDF (deleted red struck through, inserted
+  blue underlined, A4, over as many pages as needed, laid out at 72 dpi). Test
+  `textRedline` (changes, empty case, the report's own text read back, pagination).
+- Compare app: "Create Redline Report..." (left = old version, right = new version),
+  saves and opens the report. **Phase 4 is complete in code.**

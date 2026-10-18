@@ -37,7 +37,6 @@ file already carries it.
 | [Little CMS 2](https://www.littlecms.com/) | MIT | Colour management |
 | [zlib](https://zlib.net/) | zlib | Compression |
 | [libpng](http://www.libpng.org/pub/png/libpng.html) | PNG Reference Library Licence v2 | PNG images |
-| [libspng](https://libspng.org/) | BSD-2-Clause | PNG images (Leptonica) |
 | [Blend2D](https://blend2d.com/) | zlib | Fast 2D rendering backend |
 | [AsmJit](https://asmjit.com/) | zlib | Code generation for Blend2D |
 | [Clipper2](https://github.com/AngusJohnson/Clipper2) | Boost Software Licence 1.0 | Polygon clipping |

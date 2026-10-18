@@ -35,6 +35,7 @@
 #include "pdfcontractpack.h"
 #include "pdfsizereducer.h"
 #include "pdfofficeexporter.h"
+#include "pdftextredline.h"
 #include "pdfrenderer.h"
 #include "pdfcms.h"
 #include "pdffont.h"
@@ -119,6 +120,7 @@ private slots:
     void contractPack();
     void sizeReduction();
     void officeExport();
+    void textRedline();
 
 private:
     static bool createTestCertificate(const QTemporaryDir& directory, PDFCertificateEntry& certificate, QString& password);
@@ -1373,6 +1375,61 @@ void SignatureBuilderTest::officeExport()
     process.start(python, { QStringLiteral("-I"), QStringLiteral("-c"), script, docx, xlsx });
     QVERIFY(process.waitForFinished(30000));
     QVERIFY2(process.exitCode() == 0, qPrintable(QString::fromUtf8(process.readAllStandardError())));
+}
+
+void SignatureBuilderTest::textRedline()
+{
+    auto words = [](const QString& text, PDFInteger page = 0)
+    {
+        PDFTextRedline::Words result;
+        for (const QString& word : text.split(' ', Qt::SkipEmptyParts))
+        {
+            result.push_back({ word, page });
+        }
+        return result;
+    };
+
+    const PDFTextRedline::Words oldWords = words(QStringLiteral("The lease is for thirty (30) days and the rent is R 5 000 per month payable in advance. The tenant pays water."));
+    const PDFTextRedline::Words newWords = words(QStringLiteral("The lease is for sixty (60) days and the rent is R 5 000 per month payable in advance by EFT. The tenant pays."));
+    const PDFTextRedline::Changes changes = PDFTextRedline::compare(oldWords, newWords);
+    QStringList found;
+    for (const auto& change : changes)
+    {
+        found << QString("%1:[%2]->[%3]").arg(int(change.type)).arg(change.oldText, change.newText);
+    }
+    QVERIFY2(changes.size() == 3, qPrintable(found.join(" ")));
+
+    QCOMPARE(changes[0].type, PDFTextRedline::ChangeType::Replaced);
+    QCOMPARE(changes[0].oldText, QStringLiteral("thirty (30)"));
+    QCOMPARE(changes[0].newText, QStringLiteral("sixty (60)"));
+    QCOMPARE(changes[0].before, QStringLiteral("The lease is for"));
+    QCOMPARE(changes[1].type, PDFTextRedline::ChangeType::Replaced);   // "advance." -> "advance by EFT."
+    QCOMPARE(changes[2].type, PDFTextRedline::ChangeType::Replaced);   // "pays water." -> "pays."
+
+    const PDFTextRedline::Changes deletion = PDFTextRedline::compare(words(QStringLiteral("a b c d")), words(QStringLiteral("a d")));
+    QCOMPARE(deletion.size(), size_t(1));
+    QCOMPARE(deletion[0].type, PDFTextRedline::ChangeType::Deleted);
+    QCOMPARE(deletion[0].oldText, QStringLiteral("b c"));
+    const PDFTextRedline::Changes insertion = PDFTextRedline::compare(words(QStringLiteral("a d")), words(QStringLiteral("a b c d")));
+    QCOMPARE(insertion.size(), size_t(1));
+    QCOMPARE(insertion[0].type, PDFTextRedline::ChangeType::Inserted);
+    QVERIFY(PDFTextRedline::compare(oldWords, oldWords).empty());
+    QCOMPARE(PDFTextRedline::compare(PDFTextRedline::Words(), words(QStringLiteral("new text"))).size(), size_t(1));
+
+    // The report is a PDF whose text holds the changes
+    const PDFDocument report = PDFTextRedline::createReport(changes, QStringLiteral("Lease v1.pdf"), QStringLiteral("Lease v2.pdf"));
+    QVERIFY(report.getCatalog()->getPageCount() >= 1);
+    QStringList reportWords;
+    for (const PDFTextRedline::Word& word : PDFTextRedline::getWords(&report))
+    {
+        reportWords << word.text;
+    }
+    const QString reportText = reportWords.join(' ');
+    QVERIFY2(reportText.contains(QStringLiteral("sixty (60)")) && reportText.contains(QStringLiteral("thirty (30)")) && reportText.contains(QStringLiteral("Lease v2.pdf")), qPrintable(reportText));
+
+    // Many changes flow over several pages
+    PDFTextRedline::Changes many(120, changes.front());
+    QVERIFY(PDFTextRedline::createReport(many, QStringLiteral("a"), QStringLiteral("b")).getCatalog()->getPageCount() > 2);
 }
 
 QTEST_MAIN(SignatureBuilderTest)
