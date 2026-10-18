@@ -34,6 +34,7 @@
 #include "pdfsignaturelinefinder.h"
 #include "pdfcontractpack.h"
 #include "pdfsizereducer.h"
+#include "pdfofficeexporter.h"
 #include "pdfrenderer.h"
 #include "pdfcms.h"
 #include "pdffont.h"
@@ -117,6 +118,7 @@ private slots:
     void signatureLineFinder();
     void contractPack();
     void sizeReduction();
+    void officeExport();
 
 private:
     static bool createTestCertificate(const QTemporaryDir& directory, PDFCertificateEntry& certificate, QString& password);
@@ -1297,6 +1299,80 @@ void SignatureBuilderTest::sizeReduction()
     QVERIFY2(smallestSize <= emailSize, qPrintable(QString("%1 -> %2").arg(emailSize).arg(smallestSize)));
     QCOMPARE(email.getCatalog()->getPageCount(), size_t(1));
     QVERIFY(!PDFSizeReducer::getPresetName(PDFSizeReducer::Preset::Print).isEmpty());
+}
+
+void SignatureBuilderTest::officeExport()
+{
+    double value = 0.0;
+    QVERIFY(PDFOfficeExporter::parseNumber(QStringLiteral("1 234,56"), value) && qFuzzyCompare(value, 1234.56));
+    QVERIFY(PDFOfficeExporter::parseNumber(QStringLiteral("1,234.56"), value) && qFuzzyCompare(value, 1234.56));
+    QVERIFY(PDFOfficeExporter::parseNumber(QStringLiteral("R 250.00"), value) && qFuzzyCompare(value, 250.0));
+    QVERIFY(PDFOfficeExporter::parseNumber(QStringLiteral("-12"), value) && qFuzzyCompare(value, -12.0));
+    QVERIFY(PDFOfficeExporter::parseNumber(QStringLiteral("1,000,000"), value) && qFuzzyCompare(value, 1000000.0));
+    QVERIFY(!PDFOfficeExporter::parseNumber(QStringLiteral("Clay bricks"), value));
+    QVERIFY(!PDFOfficeExporter::parseNumber(QStringLiteral("2026-10-18"), value));
+
+    // A page with a title and a small table of three columns
+    PDFDocumentBuilder builder;
+    const PDFObjectReference page = builder.appendPage(QRectF(0, 0, 595, 842));
+    {
+        PDFPageContentStreamBuilder content(&builder, PDFContentStreamBuilder::CoordinateSystem::Qt, PDFPageContentStreamBuilder::Mode::Replace);
+        QPainter* painter = content.begin(page);
+        QFont font("DejaVu Sans");
+        font.setPixelSize(10);
+        painter->setFont(font);
+        painter->drawText(QPointF(60, 60), QStringLiteral("Quotation & delivery <2026>"));
+        const char* rows[][3] = { { "Item", "Qty", "Price" }, { "Clay bricks", "1 000", "2 450,00" }, { "Cement", "20", "1 790,00" } };
+        for (int row = 0; row < 3; ++row)
+        {
+            painter->drawText(QPointF(60, 100 + row * 16), QString::fromLatin1(rows[row][0]));
+            painter->drawText(QPointF(260, 100 + row * 16), QString::fromLatin1(rows[row][1]));
+            painter->drawText(QPointF(400, 100 + row * 16), QString::fromLatin1(rows[row][2]));
+        }
+        content.end(painter);
+    }
+    const PDFDocument document = builder.build();
+
+    const PDFOfficeExporter::Pages pages = PDFOfficeExporter::extract(&document);
+    QCOMPARE(pages.size(), size_t(1));
+    QStringList found;
+    for (const auto& line : pages[0])
+    {
+        found << line.cells.join(" | ");
+    }
+    QVERIFY2(pages[0].size() == 4, qPrintable(found.join("\n")));
+    QCOMPARE(pages[0][0].text, QStringLiteral("Quotation & delivery <2026>"));
+    QCOMPARE(pages[0][2].cells, (QStringList{ QStringLiteral("Clay bricks"), QStringLiteral("1 000"), QStringLiteral("2 450,00") }));
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString docx = directory.filePath(QStringLiteral("export.docx"));
+    const QString xlsx = directory.filePath(QStringLiteral("export.xlsx"));
+    QVERIFY(PDFOfficeExporter::writeDocx(docx, pages));
+    QVERIFY(PDFOfficeExporter::writeXlsx(xlsx, pages));
+
+    // Valid ZIP containers with well-formed XML and the expected content
+    const QString python = QStandardPaths::findExecutable(QStringLiteral("python3"));
+    if (python.isEmpty())
+    {
+        QSKIP("python3 is not installed, the containers are not validated");
+    }
+    const QString script = QStringLiteral(
+        "import sys, zipfile, xml.dom.minidom\n"
+        "for name in sys.argv[1:]:\n"
+        "    z = zipfile.ZipFile(name)\n"
+        "    assert z.testzip() is None\n"
+        "    for entry in z.namelist():\n"
+        "        xml.dom.minidom.parseString(z.read(entry))\n"
+        "d = zipfile.ZipFile(sys.argv[1]).read('word/document.xml').decode()\n"
+        "assert 'Quotation &amp; delivery &lt;2026&gt;' in d and '<w:tab/>' in d, d\n"
+        "x = zipfile.ZipFile(sys.argv[2]).read('xl/worksheets/sheet1.xml').decode()\n"
+        "assert '<c r=\"C3\"><v>2450</v></c>' in x and '<c r=\"B3\"><v>1000</v></c>' in x and 'Clay bricks' in x, x\n"
+        "print('ok')\n");
+    QProcess process;
+    process.start(python, { QStringLiteral("-I"), QStringLiteral("-c"), script, docx, xlsx });
+    QVERIFY(process.waitForFinished(30000));
+    QVERIFY2(process.exitCode() == 0, qPrintable(QString::fromUtf8(process.readAllStandardError())));
 }
 
 QTEST_MAIN(SignatureBuilderTest)

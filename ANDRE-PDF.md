@@ -40,7 +40,7 @@ Queue:
 - [x] A7 Phase 3.3: find signature lines (existing fields, "Signature"/"Signed" labels, underscores), sign several, checklist; Lock disabled until all are signed; the last one locks (field /Lock /P)
 - [x] A8 Phase 3.4: split a contract pack (by bookmarks / page ranges / detected first pages) + batch initial-sign-lock
 - [x] A9 Phase 4.1: size reduction before signing (on PDFOptimizer + image optimizer), blocked after the first signature
-- [ ] A10 Phase 4.2: export to Word (open in M365 Word) and Excel (tables -> .xlsx)
+- [x] A10 Phase 4.2: export to Word (open in M365 Word) and Excel (tables -> .xlsx)
 - [ ] A11 Phase 4.3: Share: Windows Share sheet (email/WhatsApp), mail with attachment
 - [ ] A12 Phase 4.4: highlight/comment polish; contract redline report in DocDiff
 - [ ] A13 Phase 6: font identification, installed check, find/download/install, embed
@@ -101,6 +101,7 @@ behind it in [docs/andre/options-report.md](docs/andre/options-report.md).
 | 2026-10-18 | *(autopilot)* "Sign & Lock" is the Sign dialog itself, not a second button: it defaults to certify "no changes", can encrypt first (AES-256, password to open, random owner password that is discarded, permissions follow the lock level), and re-reads the saved file and reports what a reader will find | One dialog, one click, and no duplicate flows to maintain. Encrypting after signing would break the signature, so the order is fixed in code. |
 | 2026-10-18 | *(autopilot)* Signature library = 4 named slots of transparent PNGs, any slot can hold initials; import crops to the ink, removes the paper by an Otsu threshold with a manual slider, keeps or replaces the ink colour; stored in the user profile, DPAPI-encrypted on Windows (plain file with owner-only permissions elsewhere, `ponytail:` noted) | Matches "four signatures scanned from an image". The slider is the calibration knob for real scans and photos. DPAPI ties the file to Andre's Windows account at no cost. |
 | 2026-10-18 | *(autopilot)* Contract signing = the default contract mode of the rules: the library image on every line Andre signs, and **one** certification signature (one PIN) whose visible appearance is the last line, with the stamp. Every found line must be decided ("I sign" / "Other party") before Sign & Lock is enabled; "Other party" lines make the lock P=2 (they can still sign), otherwise P=1 | Requirement 8 ("cannot close until all are signed") becomes "cannot lock until every line is decided", which is enforceable in the workflow. The program window is not stopped from closing. Separate digital signatures per line (field `/Lock`) are deferred until a contract needs them. An existing unsigned signature field gets the image, but the digital signature goes into a new field. |
+| 2026-10-18 | *(autopilot)* Word/Excel export written by the program itself (Office Open XML in a stored ZIP, no new library): Word gets the paragraphs and pages, Excel one sheet per page with rows split into cells at gaps of 1.5 em and numbers as numbers (South African "1 234,56" understood). On Windows with Word installed, "Open in Word" (Word's own PDF conversion) is offered first | Andre has Microsoft 365, and Word's conversion keeps the layout better than anything we could ship free. The AGPL tools (pdf2docx on PyMuPDF) stay out. For one table, the existing Select Table tool copies it as CSV for Excel. |
 | 2026-10-18 | *(autopilot)* Rebrand only the names users see: Andre PDF Editor / Viewer / Pages / Compare, launcher "Andre PDF", installer "Andre PDF" by Andre Pretorius with a new upgrade code; internal application and organisation names stay `PDF4QT ...` / `MelkaJ` | Settings and the OCR model folders are keyed on the internal names. The new upgrade code installs alongside an upstream PDF4QT install instead of replacing it. |
 
 ## Roadmap
@@ -381,3 +382,12 @@ upstream author's machine, not ours).
 - Editor: Tools -> "Reduce File Size..." picks the preset, shows "before -> after (n%
   smaller)" and applies on Yes. Optimize, Optimize Images, Sanitize and Reduce File Size
   warn on a signed document (the rewrite breaks the signatures; default No).
+
+### 2026-10-18 (night) - autopilot: A10 Word and Excel export
+- `PDFOfficeExporter` (core): characters of a page regrouped into lines by position
+  (tables are laid out as column blocks), word spaces from the text, cells at gaps over
+  1.5 em, `parseNumber` (R, spaces, comma or point decimals), `writeDocx`, `writeXlsx`,
+  `createZip` (stored entries, CRC from zlib). Test `officeExport` validates both files
+  with Python's zipfile and XML parser.
+- Editor: File -> "Export to Word..." (Windows: "Open in Word" when Word is registered
+  under App Paths, else the text export) and "Export to Excel...", both open the result.

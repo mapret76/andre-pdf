@@ -197,6 +197,8 @@ PDFEditorMainWindow::PDFEditorMainWindow(QWidget* parent) :
     m_actionManager->setAction(PDFActionManager::Optimize, ui->actionOptimize);
     m_actionManager->setAction(PDFActionManager::OptimizeImages, ui->actionOptimizeImages);
     m_actionManager->setAction(PDFActionManager::ReduceFileSize, ui->actionReduceFileSize);
+    m_actionManager->setAction(PDFActionManager::ExportToWord, ui->actionExportToWord);
+    m_actionManager->setAction(PDFActionManager::ExportToExcel, ui->actionExportToExcel);
     m_actionManager->setAction(PDFActionManager::Sanitize, ui->actionSanitize);
     m_actionManager->setAction(PDFActionManager::RemoveExternalLinks, ui->actionRemoveExternalLinks);
     m_actionManager->setAction(PDFActionManager::PageGeometry, ui->actionPageGeometry);

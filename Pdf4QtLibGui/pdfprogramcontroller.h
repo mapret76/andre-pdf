@@ -213,6 +213,8 @@ public:
         BookmarkImport,
         BookmarkGenerateAutomatically,
         ReduceFileSize,
+        ExportToWord,
+        ExportToExcel,
         LastAction
     };
 
@@ -384,6 +386,11 @@ private:
     void onActionOptimizeTriggered();
     void onActionOptimizeImagesTriggered();
     void onActionReduceFileSizeTriggered();
+    void onActionExportToWordTriggered();
+    void onActionExportToExcelTriggered();
+
+    /// Asks for the file of an export, the name of the document with the suffix
+    QString getExportFileName(const QString& title, const QString& suffix, const QString& filter);
 
     /// Asks before an operation rewriting the whole document, when it is signed - the
     /// signatures would not survive it. Returns true, when the operation can go on.

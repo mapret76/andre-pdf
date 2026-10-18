@@ -39,6 +39,7 @@
 #include "pdfoptimizedocumentdialog.h"
 #include "pdfoptimizeimagesdialog.h"
 #include "pdfsizereducer.h"
+#include "pdfofficeexporter.h"
 #include "pdfdocumentsigner.h"
 #include <QLocale>
 #include "pdfsanitizedocumentdialog.h"
@@ -74,6 +75,11 @@
 #include <QFileDialog>
 #include <QtConcurrent/QtConcurrent>
 #include <QInputDialog>
+#include <QDir>
+#include <QUrl>
+#include <QSettings>
+#include <QPushButton>
+#include <QProcess>
 #include <QMainWindow>
 #include <QToolBar>
 #include <QXmlStreamWriter>
@@ -558,6 +564,14 @@ void PDFProgramController::initialize(Features features,
     if (QAction* action = m_actionManager->getAction(PDFActionManager::Optimize))
     {
         connect(action, &QAction::triggered, this, &PDFProgramController::onActionOptimizeTriggered);
+    }
+    if (QAction* action = m_actionManager->getAction(PDFActionManager::ExportToWord))
+    {
+        connect(action, &QAction::triggered, this, &PDFProgramController::onActionExportToWordTriggered);
+    }
+    if (QAction* action = m_actionManager->getAction(PDFActionManager::ExportToExcel))
+    {
+        connect(action, &QAction::triggered, this, &PDFProgramController::onActionExportToExcelTriggered);
     }
     if (QAction* action = m_actionManager->getAction(PDFActionManager::ReduceFileSize))
     {
@@ -1592,6 +1606,86 @@ void PDFProgramController::onActionReduceFileSizeTriggered()
     }
 }
 
+QString PDFProgramController::getExportFileName(const QString& title, const QString& suffix, const QString& filter)
+{
+    const QFileInfo fileInfo(m_fileInfo.originalFileName);
+    const QString proposed = fileInfo.absolutePath() + "/" + fileInfo.completeBaseName() + suffix;
+    return QFileDialog::getSaveFileName(m_mainWindow, title, proposed, filter);
+}
+
+void PDFProgramController::onActionExportToWordTriggered()
+{
+    const QString title = tr("Export to Word");
+
+#ifdef Q_OS_WIN
+    // Microsoft Word converts a PDF itself and keeps its layout far better than a
+    // text export, so it is offered first, when it is installed
+    const QSettings appPaths("HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\Winword.exe", QSettings::NativeFormat);
+    const QString wordPath = appPaths.value(".", appPaths.value("Default")).toString();
+    if (!wordPath.isEmpty() && QFile::exists(wordPath) && QFile::exists(m_fileInfo.originalFileName))
+    {
+        QMessageBox box(QMessageBox::Question, title,
+                        tr("Microsoft Word can open the PDF and convert it with its layout (pictures, tables and columns). "
+                           "The text export keeps only the text. Unsaved changes are not in the file Word opens."),
+                        QMessageBox::Cancel, m_mainWindow);
+        QPushButton* openInWord = box.addButton(tr("Open in Word"), QMessageBox::AcceptRole);
+        QPushButton* exportText = box.addButton(tr("Export Text"), QMessageBox::ActionRole);
+        box.setDefaultButton(openInWord);
+        box.exec();
+        if (box.clickedButton() == openInWord)
+        {
+            if (!QProcess::startDetached(wordPath, { QDir::toNativeSeparators(m_fileInfo.originalFileName) }))
+            {
+                QMessageBox::critical(m_mainWindow, title, tr("Microsoft Word could not be started."));
+            }
+            return;
+        }
+        if (box.clickedButton() != exportText)
+        {
+            return;
+        }
+    }
+#endif
+
+    const QString fileName = getExportFileName(title, ".docx", tr("Word document (*.docx)"));
+    if (fileName.isEmpty())
+    {
+        return;
+    }
+
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QString errorMessage;
+    const bool isWritten = pdf::PDFOfficeExporter::writeDocx(fileName, pdf::PDFOfficeExporter::extract(m_pdfDocument.data()), &errorMessage);
+    QApplication::restoreOverrideCursor();
+    if (!isWritten)
+    {
+        QMessageBox::critical(m_mainWindow, title, errorMessage);
+        return;
+    }
+    QDesktopServices::openUrl(QUrl::fromLocalFile(fileName));
+}
+
+void PDFProgramController::onActionExportToExcelTriggered()
+{
+    const QString title = tr("Export to Excel");
+    const QString fileName = getExportFileName(title, ".xlsx", tr("Excel workbook (*.xlsx)"));
+    if (fileName.isEmpty())
+    {
+        return;
+    }
+
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QString errorMessage;
+    const bool isWritten = pdf::PDFOfficeExporter::writeXlsx(fileName, pdf::PDFOfficeExporter::extract(m_pdfDocument.data()), &errorMessage);
+    QApplication::restoreOverrideCursor();
+    if (!isWritten)
+    {
+        QMessageBox::critical(m_mainWindow, title, errorMessage);
+        return;
+    }
+    QDesktopServices::openUrl(QUrl::fromLocalFile(fileName));
+}
+
 void PDFProgramController::onActionOptimizeTriggered()
 {
     if (!confirmRewriteOfSignedDocument(tr("Optimize")))
@@ -2173,6 +2267,8 @@ void PDFProgramController::updateActionsAvailability()
     m_actionManager->setEnabled(PDFActionManager::Optimize, hasValidDocument);
     m_actionManager->setEnabled(PDFActionManager::OptimizeImages, hasValidDocument);
     m_actionManager->setEnabled(PDFActionManager::ReduceFileSize, hasValidDocument);
+    m_actionManager->setEnabled(PDFActionManager::ExportToWord, hasValidDocument);
+    m_actionManager->setEnabled(PDFActionManager::ExportToExcel, hasValidDocument);
     m_actionManager->setEnabled(PDFActionManager::Sanitize, hasValidDocument);
     m_actionManager->setEnabled(PDFActionManager::RemoveExternalLinks, hasValidDocument);
     m_actionManager->setEnabled(PDFActionManager::PageGeometry, hasValidDocument && canModify);

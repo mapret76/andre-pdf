@@ -37,6 +37,8 @@
     <addaction name="actionSend_by_E_Mail"/>
     <addaction name="actionPrint"/>
     <addaction name="actionRender_to_Images"/>
+    <addaction name="actionExportToWord"/>
+    <addaction name="actionExportToExcel"/>
     <addaction name="separator"/>
     <addaction name="actionProperties"/>
     <addaction name="separator"/>
@@ -785,6 +787,22 @@
    </property>
    <property name="statusTip">
     <string>Optimizes document to reduce file size.</string>
+   </property>
+  </action>
+  <action name="actionExportToWord">
+   <property name="text">
+    <string>Export to &amp;Word...</string>
+   </property>
+   <property name="statusTip">
+    <string>Opens the document in Microsoft Word, or saves its text as a Word document.</string>
+   </property>
+  </action>
+  <action name="actionExportToExcel">
+   <property name="text">
+    <string>Export to E&amp;xcel...</string>
+   </property>
+   <property name="statusTip">
+    <string>Saves the text of every page as a sheet of an Excel workbook, tables split into cells.</string>
    </property>
   </action>
   <action name="actionReduceFileSize">
