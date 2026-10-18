@@ -1,5 +1,9 @@
 # CLAUDE.md
 
+> **Fork note (Andre PDF):** this repository is `mapret76/andre-pdf`, a fork of PDF4QT.
+> Read [ANDRE-PDF.md](ANDRE-PDF.md) first: it holds the fork's decisions, roadmap and progress log.
+> The machine-specific paths below describe the upstream author's Windows PC, not the vault.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 PDF4QT is a C++20 / Qt 6 PDF library plus a family of desktop applications (editor, viewer, page master, diff, launch pad) and a command line tool. Single author project (Jakub Melka), MIT licensed since April 2025.
