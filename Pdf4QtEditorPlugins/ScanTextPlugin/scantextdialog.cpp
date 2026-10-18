@@ -22,11 +22,13 @@
 
 #include "scantextdialog.h"
 #include "pdffontinstaller.h"
+#include "pdfscanfontbuilder.h"
 #include "pdfdocument.h"
 #include "pdfpage.h"
 
 #include <QLabel>
 #include <QPainter>
+#include <QFontDatabase>
 #include <QLineEdit>
 #include <QHeaderView>
 #include <QMessageBox>
@@ -77,8 +79,11 @@ ScanTextDialog::ScanTextDialog(QWidget* parent, const pdf::PDFDocument* document
     QPushButton* onlineButton = new QPushButton(tr("Search Free Fonts Online..."), this);
     onlineButton->setToolTip(tr("Downloads common free fonts (Google Fonts and others, from Fontsource) to try them. Only the fonts are downloaded, the scan never leaves this computer."));
     m_installButton = new QPushButton(tr("Install Font..."), this);
+    QPushButton* scanFontButton = new QPushButton(tr("Build Font from This Scan"), this);
+    scanFontButton->setToolTip(tr("When no font is close: the letters of this page are collected, averaged and made into a font, so the edit uses the letters of the document itself."));
     identifyLayout->addWidget(identifyButton);
     identifyLayout->addWidget(onlineButton);
+    identifyLayout->addWidget(scanFontButton);
     identifyLayout->addStretch();
     identifyLayout->addWidget(m_installButton);
     layout->addLayout(identifyLayout);
@@ -112,6 +117,7 @@ ScanTextDialog::ScanTextDialog(QWidget* parent, const pdf::PDFDocument* document
 
     connect(identifyButton, &QPushButton::clicked, this, [this]() { identify(); });
     connect(onlineButton, &QPushButton::clicked, this, &ScanTextDialog::searchOnline);
+    connect(scanFontButton, &QPushButton::clicked, this, &ScanTextDialog::buildScanFont);
     connect(m_installButton, &QPushButton::clicked, this, &ScanTextDialog::installSelected);
     connect(m_matchTable, &QTableWidget::itemSelectionChanged, this, &ScanTextDialog::updatePreview);
     connect(m_newTextEdit, &QLineEdit::textChanged, this, &ScanTextDialog::updatePreview);
@@ -169,7 +175,7 @@ void ScanTextDialog::identify(QStringList extraFamilies)
             families << family;
         }
     }
-    families << extraFamilies << QStringList(m_trialFamilies.cbegin(), m_trialFamilies.cend());
+    families << extraFamilies << QStringList(m_trialFamilies.cbegin(), m_trialFamilies.cend()) << m_scanFonts.keys();
     families.removeDuplicates();
 
     QApplication::setOverrideCursor(Qt::WaitCursor);
@@ -194,7 +200,8 @@ void ScanTextDialog::identify(QStringList extraFamilies)
     for (const pdf::PDFFontIdentifier::Match& match : m_matches)
     {
         QString style = match.bold ? (match.italic ? tr("Bold Italic") : tr("Bold")) : (match.italic ? tr("Italic") : tr("Regular"));
-        QString status = m_trialFamilies.contains(match.family) ? tr("free download, not installed") : tr("installed");
+        QString status = m_scanFonts.contains(match.family) ? tr("from this scan (%1 letters)").arg(m_scanFonts.value(match.family).size())
+                                                           : (m_trialFamilies.contains(match.family) ? tr("free download, not installed") : tr("installed"));
         m_matchTable->insertRow(row);
         m_matchTable->setItem(row, 0, new QTableWidgetItem(match.family));
         m_matchTable->setItem(row, 1, new QTableWidgetItem(style));
@@ -258,6 +265,26 @@ void ScanTextDialog::searchOnline()
     identify(loaded);
 }
 
+void ScanTextDialog::buildScanFont()
+{
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QString characters;
+    const QString family = tr("Scan Font %1").arg(m_scanFonts.size() + 1);
+    const QByteArray font = pdf::PDFScanFontBuilder::build(m_document, { m_pageIndex }, family, &characters);
+    const int id = font.isEmpty() ? -1 : QFontDatabase::addApplicationFontFromData(font);
+    QApplication::restoreOverrideCursor();
+
+    if (id < 0)
+    {
+        QMessageBox::information(this, windowTitle(), tr("Too few letters of this page could be read to build a font. The page needs OCR text, and its letters must not touch each other."));
+        return;
+    }
+
+    const QString loaded = QFontDatabase::applicationFontFamilies(id).value(0, family);
+    m_scanFonts.insert(loaded, characters);
+    identify({ loaded });
+}
+
 const pdf::PDFFontIdentifier::Match* ScanTextDialog::getSelectedMatch() const
 {
     const QList<QTableWidgetItem*> selected = m_matchTable->selectedItems();
@@ -271,6 +298,11 @@ const pdf::PDFFontIdentifier::Match* ScanTextDialog::getSelectedMatch() const
 
 bool ScanTextDialog::ensureInstalled(const QString& family)
 {
+    if (m_scanFonts.contains(family))
+    {
+        // Built from the document itself: embedded in the PDF, nothing to install
+        return true;
+    }
     if (pdf::PDFFontIdentifier::isInstalled(family) && !m_trialFamilies.contains(family))
     {
         return true;
@@ -368,6 +400,25 @@ void ScanTextDialog::accept()
     if (m_trialFamilies.contains(match->family) && !ensureInstalled(match->family))
     {
         return;
+    }
+
+    // Letters the scan did not show are drawn in another font
+    if (m_scanFonts.contains(match->family))
+    {
+        QString missing;
+        for (QChar c : m_newTextEdit->text())
+        {
+            if (!c.isSpace() && !m_scanFonts.value(match->family).contains(c) && !missing.contains(c))
+            {
+                missing += c;
+            }
+        }
+        if (!missing.isEmpty() &&
+            QMessageBox::question(this, windowTitle(), tr("The letters \"%1\" do not appear on this page, they are drawn in a similar installed font. Continue?").arg(missing),
+                                  QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes) != QMessageBox::Yes)
+        {
+            return;
+        }
     }
 
     m_edit.pageIndex = m_pageIndex;

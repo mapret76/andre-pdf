@@ -29,6 +29,7 @@
 
 #include <QDialog>
 #include <QSet>
+#include <QMap>
 
 class QLabel;
 class QLineEdit;
@@ -61,6 +62,7 @@ public:
 
 private:
     void searchOnline();
+    void buildScanFont();
     void installSelected();
     void updatePreview();
     const pdf::PDFFontIdentifier::Match* getSelectedMatch() const;
@@ -74,6 +76,7 @@ private:
     QColor m_ink;
     std::vector<pdf::PDFFontIdentifier::Match> m_matches;
     QSet<QString> m_trialFamilies;    ///< Downloaded for the trial, not installed
+    QMap<QString, QString> m_scanFonts; ///< Fonts built from the scan: family -> its characters
     QStringList m_pageFamilies;       ///< Named by the fonts of the page
     pdf::PDFScanTextEditor::Edit m_edit;
 

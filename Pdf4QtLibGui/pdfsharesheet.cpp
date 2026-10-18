@@ -27,6 +27,7 @@
 
 #if defined(Q_OS_WIN) && defined(_MSC_VER) && __has_include(<winrt/Windows.ApplicationModel.DataTransfer.h>)
 #define PDF4QT_WINDOWS_SHARE_SHEET
+#pragma message("Andre PDF: the Windows share sheet (C++/WinRT) is compiled in")
 #include <map>
 #include <Windows.h>
 #include <shobjidl_core.h>

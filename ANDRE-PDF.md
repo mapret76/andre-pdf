@@ -45,7 +45,7 @@ Queue:
 - [x] A12 Phase 4.4: highlight/comment polish; contract redline report in DocDiff
 - [x] A13 Phase 6: font identification, installed check, find/download/install, embed
 - [~] A14 Phase 5: Android - Pdf4QtLibCore on arm64 in CI, then Qt Quick viewer + sign with .pfx, APK from CI (app and its test done, desktop build; the APK waits for the `workflow` scope: `docs/andre/android-workflow.yml`)
-- [ ] A15 Phase 7: scan-font engine
+- [x] A15 Phase 7: scan-font engine
 - [ ] A16 Release: MSI + APK from CI, ledger and skill final, user guide in docs/andre/
 
 Waiting on Andre:
@@ -104,6 +104,7 @@ behind it in [docs/andre/options-report.md](docs/andre/options-report.md).
 | 2026-10-18 | *(autopilot)* Signature library = 4 named slots of transparent PNGs, any slot can hold initials; import crops to the ink, removes the paper by an Otsu threshold with a manual slider, keeps or replaces the ink colour; stored in the user profile, DPAPI-encrypted on Windows (plain file with owner-only permissions elsewhere, `ponytail:` noted) | Matches "four signatures scanned from an image". The slider is the calibration knob for real scans and photos. DPAPI ties the file to Andre's Windows account at no cost. |
 | 2026-10-18 | *(autopilot)* Contract signing = the default contract mode of the rules: the library image on every line Andre signs, and **one** certification signature (one PIN) whose visible appearance is the last line, with the stamp. Every found line must be decided ("I sign" / "Other party") before Sign & Lock is enabled; "Other party" lines make the lock P=2 (they can still sign), otherwise P=1 | Requirement 8 ("cannot close until all are signed") becomes "cannot lock until every line is decided", which is enforceable in the workflow. The program window is not stopped from closing. Separate digital signatures per line (field `/Lock`) are deferred until a contract needs them. An existing unsigned signature field gets the image, but the digital signature goes into a new field. |
 | 2026-10-18 | *(autopilot)* Word/Excel export written by the program itself (Office Open XML in a stored ZIP, no new library): Word gets the paragraphs and pages, Excel one sheet per page with rows split into cells at gaps of 1.5 em and numbers as numbers (South African "1 234,56" understood). On Windows with Word installed, "Open in Word" (Word's own PDF conversion) is offered first | Andre has Microsoft 365, and Word's conversion keeps the layout better than anything we could ship free. The AGPL tools (pdf2docx on PyMuPDF) stay out. For one table, the existing Select Table tool copies it as CSV for Excel. |
+| 2026-10-18 | *(autopilot)* Scan-font engine written from scratch in C++ (connected components, averaging, pixel-edge tracing, Douglas-Peucker, a TrueType writer with straight outlines) instead of jbig2enc + autotrace + fontTools | autotrace (and Potrace) are GPL and must not be shipped, fontTools is Python. The OpenType format is public. Straight segments at 1000 units per em are smooth enough at text sizes. |
 | 2026-10-18 | *(autopilot)* Rebrand only the names users see: Andre PDF Editor / Viewer / Pages / Compare, launcher "Andre PDF", installer "Andre PDF" by Andre Pretorius with a new upgrade code; internal application and organisation names stay `PDF4QT ...` / `MelkaJ` | Settings and the OCR model folders are keyed on the internal names. The new upgrade code installs alongside an upstream PDF4QT install instead of replacing it. |
 
 ## Roadmap
@@ -461,3 +462,19 @@ upstream author's machine, not ours).
 - **Waiting:** the Android CI workflow is written (`docs/andre/android-workflow.yml`) but
   cannot be pushed into `.github/workflows/` without the `workflow` scope. Untested
   risks: Blend2D JIT on arm64 (vcpkg default), Android share sheet (now: open the file).
+
+### 2026-10-18 (night) - autopilot: A15 font built from the scan (Phase 7)
+- `PDFScanFontBuilder` (core): the page rendered at 300 dpi, each OCR word split into its
+  8-connected ink shapes (dots and accents joined to their letters), used only when the
+  shapes match the letters one to one; baseline from the letters without descenders;
+  the samples of a letter scaled to their median size and averaged (noise removed);
+  outlines traced on the pixel edges (outer clockwise, holes counter-clockwise) and
+  simplified (0.7 px); a TrueType font written (head, hhea, maxp, OS/2 v4 with embedding
+  allowed, name, cmap 4, post 3, loca, glyf, hmtx; em from the x-height; spacing from
+  the gaps of the scan).
+- Scan Text dialog: "Build Font from This Scan" adds "Scan Font n" (from this scan, N
+  letters) to the ranking; it needs no install (embedded in the PDF); letters missing
+  from the scan are reported before the edit (drawn in a similar font).
+- Test `scanFont`: outline tracing of a ring (outer + hole, orientation, area), harvest of a
+  page in DejaVu Serif (over 25 letters, x-height at 300 dpi), the font loads in Qt
+  (QRawFont, QFontDatabase), and text drawn in it is identified as DejaVu Serif.

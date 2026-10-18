@@ -39,6 +39,8 @@
 #include "pdffontidentifier.h"
 #include "pdffontinstaller.h"
 #include "pdfscantexteditor.h"
+#include "pdfscanfontbuilder.h"
+#include <QRawFont>
 #include "pdfrenderer.h"
 #include "pdfcms.h"
 #include "pdffont.h"
@@ -131,6 +133,7 @@ private slots:
     void fontMatching();
     void fontInstaller();
     void scanTextEdit();
+    void scanFont();
 
 private:
     static bool createTestCertificate(const QTemporaryDir& directory, PDFCertificateEntry& certificate, QString& password);
@@ -1709,6 +1712,113 @@ void SignatureBuilderTest::scanTextEdit()
     QVERIFY(PDFScanTextEditor::apply(&document, edit, &isOcrLayerRemoved));
     QVERIFY(!isOcrLayerRemoved);
     QCOMPARE(PDFScanTextEditor::getText(edited.data(), 0, QRectF(55, 842 - 272, 260, 30)), QStringLiteral("Other line stays"));
+}
+
+void SignatureBuilderTest::scanFont()
+{
+    // Outline tracing: a square with a square hole gives an outer and an inner outline
+    QImage ring(10, 10, QImage::Format_Grayscale8);
+    ring.fill(255);
+    for (int y = 1; y < 9; ++y)
+    {
+        for (int x = 1; x < 9; ++x)
+        {
+            if (x < 3 || x > 6 || y < 3 || y > 6)
+            {
+                ring.setPixel(x, y, 0);
+            }
+        }
+    }
+    const std::vector<QPolygonF> contours = PDFScanFontBuilder::traceContours(ring);
+    QCOMPARE(contours.size(), size_t(2));
+    auto area = [](const QPolygonF& polygon)
+    {
+        double sum = 0.0;
+        for (qsizetype i = 0; i < polygon.size(); ++i)
+        {
+            const QPointF& a = polygon[i];
+            const QPointF& b = polygon[(i + 1) % polygon.size()];
+            sum += a.x() * b.y() - b.x() * a.y();
+        }
+        return sum * 0.5;
+    };
+    // On the screen (y down) the outer outline is clockwise (positive area), the hole not
+    QVERIFY((area(contours[0]) > 0) != (area(contours[1]) > 0));
+    QCOMPARE(qAbs(area(contours[0])) + qAbs(area(contours[1])), 64.0 + 16.0);
+
+    if (!PDFFontIdentifier::isInstalled(QStringLiteral("DejaVu Serif")) || !PDFFontIdentifier::isInstalled(QStringLiteral("DejaVu Sans")))
+    {
+        QSKIP("The DejaVu fonts are not installed");
+    }
+
+    // A page of a contract in DejaVu Serif, its letters become the font
+    PDFDocumentBuilder builder;
+    const PDFObjectReference page = builder.appendPage(QRectF(0, 0, 595, 842));
+    {
+        PDFPageContentStreamBuilder content(&builder, PDFContentStreamBuilder::CoordinateSystem::Qt, PDFPageContentStreamBuilder::Mode::Replace);
+        QPainter* painter = content.begin(page);
+        QFont font("DejaVu Serif");
+        font.setPointSizeF(12);
+        painter->setFont(font);
+        const QStringList lines = { QStringLiteral("The purchaser shall pay the amount of R 950 000 to the seller"),
+                                    QStringLiteral("within thirty days of the signature of this agreement 2026"),
+                                    QStringLiteral("Both parties confirm that they read and understood every clause"),
+                                    QStringLiteral("Signed at Rustenburg by the buyer and seller on 18 October") };
+        for (int i = 0; i < lines.size(); ++i)
+        {
+            painter->drawText(QPointF(50, 100 + i * 20), lines[i]);
+        }
+        content.end(painter);
+    }
+    const PDFDocument document = builder.build();
+
+    PDFScanFontBuilder::Metrics metrics;
+    const std::vector<PDFScanFontBuilder::Glyph> glyphs = PDFScanFontBuilder::harvest(&document, { 0 }, 300.0, &metrics);
+    QString characters;
+    for (const auto& glyph : glyphs)
+    {
+        characters += glyph.character;
+    }
+    QVERIFY2(glyphs.size() > 25, qPrintable(characters));
+    QVERIFY2(characters.contains('9') && characters.contains('5') && characters.contains('0') && characters.contains('a'), qPrintable(characters));
+    QVERIFY(metrics.xHeight > 15 && metrics.xHeight < 35);   // 12 pt at 300 dpi
+
+    const QByteArray ttf = PDFScanFontBuilder::createTrueTypeFont(glyphs, metrics, QStringLiteral("Scan Font Test"));
+    QVERIFY(ttf.size() > 1000);
+    const QRawFont raw(ttf, 40);
+    QVERIFY(raw.isValid());
+    QCOMPARE(raw.familyName(), QStringLiteral("Scan Font Test"));
+    QVERIFY(raw.supportsCharacter(QChar('9')) && raw.supportsCharacter(QChar('a')) && !raw.supportsCharacter(QChar('X')));
+
+    const int id = QFontDatabase::addApplicationFontFromData(ttf);
+    QVERIFY(id >= 0);
+    QCOMPARE(QFontDatabase::applicationFontFamilies(id).value(0), QStringLiteral("Scan Font Test"));
+
+    // Text drawn in the scan font is recognized as DejaVu Serif: the shapes survived
+    const QString text = QStringLiteral("seller 950 000");
+    QFont scanFont(QStringLiteral("Scan Font Test"));
+    scanFont.setPixelSize(48);
+    scanFont.setStyleStrategy(QFont::NoFontMerging);
+    QImage image(QFontMetrics(scanFont).horizontalAdvance(text) + 40, 80, QImage::Format_RGB32);
+    image.fill(Qt::white);
+    {
+        QPainter painter(&image);
+        painter.setRenderHint(QPainter::TextAntialiasing);
+        painter.setFont(scanFont);
+        painter.setPen(Qt::black);
+        painter.drawText(QPointF(20, 60), text);
+    }
+    const std::vector<PDFFontIdentifier::Match> matches = PDFFontIdentifier::matchScan(image, text, { QStringLiteral("DejaVu Serif"), QStringLiteral("DejaVu Sans"), QStringLiteral("DejaVu Sans Mono") }, 3);
+    QStringList found;
+    for (const auto& match : matches)
+    {
+        found << QString("%1 %2").arg(match.family).arg(match.score, 0, 'f', 3);
+    }
+    QVERIFY2(!matches.empty() && matches.front().family == QStringLiteral("DejaVu Serif") && matches.front().score > 0.6, qPrintable(found.join(", ")));
+
+    QString built;
+    QVERIFY(!PDFScanFontBuilder::build(&document, { 0 }, QStringLiteral("Scan Font Build"), &built).isEmpty());
+    QCOMPARE(built, characters);
 }
 
 QTEST_MAIN(SignatureBuilderTest)
