@@ -20,14 +20,13 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-#include "pdftextredline.h"
-#include <QUrl>
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 
 #include "aboutdialog.h"
 #include "differencesdockwidget.h"
 #include "settingsdockwidget.h"
+#include "pdftextredline.h"
 
 #include "pdfwidgetutils.h"
 #include "pdfdocumentreader.h"
@@ -39,6 +38,7 @@
 
 #include <QToolBar>
 #include <QDesktopServices>
+#include <QUrl>
 #include <QMessageBox>
 #include <QInputDialog>
 #include <QFileDialog>
