@@ -18,5 +18,10 @@
         <file>create-yes-mark.svg</file>
         <file>sign-digitally.svg</file>
         <file>sign-electronically.svg</file>
+        <file>signature-slot-1.svg</file>
+        <file>signature-slot-2.svg</file>
+        <file>signature-slot-3.svg</file>
+        <file>signature-slot-4.svg</file>
+        <file>signature-library.svg</file>
     </qresource>
 </RCC>

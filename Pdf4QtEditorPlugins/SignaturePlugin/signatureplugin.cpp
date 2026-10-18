@@ -30,6 +30,7 @@
 #include "signdialog.h"
 #include "pdfdocumentsigner.h"
 #include "pdfsignaturestamp.h"
+#include "signaturelibrarydialog.h"
 
 #include <QBuffer>
 #include <QAction>
@@ -72,6 +73,17 @@ void SignaturePlugin::setWidget(pdf::PDFWidget* widget)
     QAction* createLineAction = new QAction(QIcon(":/pdfplugins/signatureplugin/create-line.svg"), tr("Create &Line"), this);
     QAction* createDotAction = new QAction(QIcon(":/pdfplugins/signatureplugin/create-dot.svg"), tr("Create &Dot"), this);
     QAction* createSvgImageAction = new QAction(QIcon(":/pdfplugins/signatureplugin/create-svg-image.svg"), tr("Create SVG &Image"), this);
+    std::array<QAction*, pdf::PDFSignatureLibrary::SLOT_COUNT> signatureSlotActions = { };
+    for (int i = 0; i < pdf::PDFSignatureLibrary::SLOT_COUNT; ++i)
+    {
+        signatureSlotActions[i] = new QAction(QIcon(QString(":/pdfplugins/signatureplugin/signature-slot-%1.svg").arg(i + 1)), tr("Place Signature %1").arg(i + 1), this);
+        signatureSlotActions[i]->setObjectName(QString("signaturetool_signatureSlot%1Action").arg(i + 1));
+        signatureSlotActions[i]->setCheckable(true);
+        m_actions[SignatureSlot1 + i] = signatureSlotActions[i];
+    }
+    QAction* signatureLibraryAction = new QAction(QIcon(":/pdfplugins/signatureplugin/signature-library.svg"), tr("Signature &Library..."), this);
+    signatureLibraryAction->setObjectName("signaturetool_signatureLibraryAction");
+    m_actions[SignatureLibrary] = signatureLibraryAction;
     QAction* clearAction = new QAction(QIcon(":/pdfplugins/signatureplugin/clear.svg"), tr("Clear All &Graphics"), this);
     QAction* signElectronicallyAction = new QAction(QIcon(":/pdfplugins/signatureplugin/sign-electronically.svg"), tr("Sign &Electronically"), this);
     QAction* signDigitallyAction = new QAction(QIcon(":/pdfplugins/signatureplugin/sign-digitally.svg"), tr("Sign Digitally &With Certificate"), this);
@@ -151,6 +163,17 @@ void SignaturePlugin::setWidget(pdf::PDFWidget* widget)
     m_tools[LineTool] = new pdf::PDFCreatePCElementLineTool(widget->getDrawWidgetProxy(), &m_scene, createLineAction, false, false, this);
     m_tools[DotTool] = new pdf::PDFCreatePCElementDotTool(widget->getDrawWidgetProxy(), &m_scene, createDotAction, this);
     m_tools[ImageTool] = new pdf::PDFCreatePCElementImageTool(widget->getDrawWidgetProxy(), &m_scene, createSvgImageAction, QByteArray(), true, this);
+    for (int i = 0; i < pdf::PDFSignatureLibrary::SLOT_COUNT; ++i)
+    {
+        m_tools[SignatureSlot1Tool + i] = new pdf::PDFCreatePCElementImageTool(widget->getDrawWidgetProxy(), &m_scene, signatureSlotActions[i], QByteArray(), false, this);
+    }
+
+    QString libraryErrorMessage;
+    if (!m_signatureLibrary.load(pdf::PDFSignatureLibrary::getDefaultFileName(), &libraryErrorMessage))
+    {
+        QMessageBox::warning(widget, tr("Signature Library"), libraryErrorMessage);
+    }
+    updateSignatureSlots();
 
     pdf::PDFToolManager* toolManager = widget->getToolManager();
     for (pdf::PDFWidgetTool* tool : m_tools)
@@ -170,6 +193,7 @@ void SignaturePlugin::setWidget(pdf::PDFWidget* widget)
     connect(signElectronicallyAction, &QAction::triggered, this, &SignaturePlugin::onSignElectronically);
     connect(signDigitallyAction, &QAction::triggered, this, &SignaturePlugin::onSignDigitally);
     connect(certificatesAction, &QAction::triggered, this, &SignaturePlugin::onOpenCertificatesManager);
+    connect(signatureLibraryAction, &QAction::triggered, this, &SignaturePlugin::onOpenSignatureLibrary);
     connect(m_widget, &pdf::PDFWidget::sceneActivityChanged, this, &SignaturePlugin::onSceneActivityChanged);
 
     updateActions();
@@ -194,6 +218,7 @@ std::vector<QAction*> SignaturePlugin::getActions() const
     result.push_back(m_actions[SignElectronically]);
     result.push_back(m_actions[SignDigitally]);
     result.push_back(m_actions[Certificates]);
+    result.push_back(m_actions[SignatureLibrary]);
 
     return result;
 }
@@ -621,6 +646,45 @@ void SignaturePlugin::checkSavedFile(const QString& fileName, const QString& sig
     QMessageBox::information(m_widget, tr("Signed Document Check"), lines.join('\n'));
 }
 
+void SignaturePlugin::onOpenSignatureLibrary()
+{
+    SignatureLibraryDialog dialog(m_dataExchangeInterface->getMainWindow(), m_signatureLibrary);
+    if (dialog.exec() != QDialog::Accepted)
+    {
+        return;
+    }
+
+    pdf::PDFSignatureLibrary library = dialog.getLibrary();
+    QString errorMessage;
+    if (!library.save(pdf::PDFSignatureLibrary::getDefaultFileName(), &errorMessage))
+    {
+        QMessageBox::critical(m_widget, tr("Signature Library"), errorMessage);
+        return;
+    }
+
+    m_signatureLibrary = std::move(library);
+    updateSignatureSlots();
+    updateActions();
+}
+
+void SignaturePlugin::updateSignatureSlots()
+{
+    for (int i = 0; i < pdf::PDFSignatureLibrary::SLOT_COUNT; ++i)
+    {
+        const pdf::PDFSignatureLibrary::Slot& slot = m_signatureLibrary.getSlot(i);
+        QAction* action = m_actions[SignatureSlot1 + i];
+        action->setText(tr("Place %1").arg(m_signatureLibrary.getDisplayName(i)));
+        action->setToolTip(slot.isEmpty() ? tr("Slot %1 of the signature library is empty, fill it in the Signature Library").arg(i + 1)
+                                          : tr("Place %1 - drag a rectangle on the page").arg(m_signatureLibrary.getDisplayName(i)));
+
+        auto* tool = static_cast<pdf::PDFCreatePCElementImageTool*>(m_tools[SignatureSlot1Tool + i]);
+        if (auto* element = static_cast<pdf::PDFPageContentImageElement*>(tool->getElement()))
+        {
+            element->setContent(slot.png);
+        }
+    }
+}
+
 QString SignaturePlugin::getSignedFileName() const
 {
     QFileInfo fileInfo(m_dataExchangeInterface->getOriginalFileName());
@@ -733,7 +797,8 @@ void SignaturePlugin::updateActions()
             }
 
             if (action == m_actions[Activate] ||
-                action == m_actions[Certificates])
+                action == m_actions[Certificates] ||
+                action == m_actions[SignatureLibrary])
             {
                 continue;
             }
@@ -754,6 +819,11 @@ void SignaturePlugin::updateActions()
     {
         m_actions[actionId]->setEnabled(true);
     }
+    for (int i = 0; i < pdf::PDFSignatureLibrary::SLOT_COUNT; ++i)
+    {
+        m_actions[SignatureSlot1 + i]->setEnabled(!m_signatureLibrary.getSlot(i).isEmpty());
+    }
+    m_actions[SignatureLibrary]->setEnabled(true);
 
     // Clear action
     QAction* clearAction = m_actions[Clear];

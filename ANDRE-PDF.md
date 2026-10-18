@@ -35,7 +35,7 @@ Queue:
 - [x] A2 Phase 2.4: QR code + SHA-256 fingerprint of the pre-signing document in the visible stamp
 - [x] A3 Phase 2.5: one "Sign & Lock" action (optional encrypt -> certify -> re-open -> verify)
 - [x] A4 Rebrand to "Andre PDF" (window titles, About, installer product name; internal settings ids kept)
-- [ ] A5 Phase 3.1: signature library - 4 slots, import from a scanned image (background removed), DPAPI-protected on Windows
+- [x] A5 Phase 3.1: signature library - 4 slots, import from a scanned image (background removed), DPAPI-protected on Windows
 - [ ] A6 Phase 3.2: initial every page (chosen slot, position, skip pages)
 - [ ] A7 Phase 3.3: find signature lines (existing fields, "Signature"/"Signed" labels, underscores), sign several, checklist; Lock disabled until all are signed; the last one locks (field /Lock /P)
 - [ ] A8 Phase 3.4: split a contract pack (by bookmarks / page ranges / detected first pages) + batch initial-sign-lock
@@ -97,6 +97,7 @@ behind it in [docs/andre/options-report.md](docs/andre/options-report.md).
 | 2026-10-18 | *(autopilot)* Credits: `THIRD-PARTY-NOTICES.md` in the repo, `THIRD-PARTY-NOTICES.txt` assembled at install time (our list + `LICENSE` + `3rdparty_licenses/` + every vcpkg `copyright` file), one row per component in Help -> About | Andre asked for credit to all GPL and other software. Taking the texts from vcpkg at build time keeps them exact for whatever versions are shipped. Qt is LGPL-3.0 and stays dynamically linked and replaceable. |
 | 2026-10-18 | *(autopilot)* Verification stamp = QR code + text; the QR holds plain text (signer, UTC time, lock level, SHA-256 of the certificate, SHA-256 of the file before signing) | Any phone QR scanner shows it, no server needed. The file fingerprint is checkable because the signature is appended to the original bytes. An online "verify" page would need a hosted service, so there is none. |
 | 2026-10-18 | *(autopilot)* "Sign & Lock" is the Sign dialog itself, not a second button: it defaults to certify "no changes", can encrypt first (AES-256, password to open, random owner password that is discarded, permissions follow the lock level), and re-reads the saved file and reports what a reader will find | One dialog, one click, and no duplicate flows to maintain. Encrypting after signing would break the signature, so the order is fixed in code. |
+| 2026-10-18 | *(autopilot)* Signature library = 4 named slots of transparent PNGs, any slot can hold initials; import crops to the ink, removes the paper by an Otsu threshold with a manual slider, keeps or replaces the ink colour; stored in the user profile, DPAPI-encrypted on Windows (plain file with owner-only permissions elsewhere, `ponytail:` noted) | Matches "four signatures scanned from an image". The slider is the calibration knob for real scans and photos. DPAPI ties the file to Andre's Windows account at no cost. |
 | 2026-10-18 | *(autopilot)* Rebrand only the names users see: Andre PDF Editor / Viewer / Pages / Compare, launcher "Andre PDF", installer "Andre PDF" by Andre Pretorius with a new upgrade code; internal application and organisation names stay `PDF4QT ...` / `MelkaJ` | Settings and the OCR model folders are keyed on the internal names. The new upgrade code installs alongside an upstream PDF4QT install instead of replacing it. |
 
 ## Roadmap
@@ -314,3 +315,14 @@ upstream author's machine, not ours).
 - Full suite on the vault (`ctest` in `build-full`): 33 of 34 pass. `UnitTestsFontEncoding::test_standard_font_zapf_dingbats`
   fails on the vault only (the Ubuntu URW clone `D050000L.otf` is found but yields no glyphs); the code is
   upstream's and untouched, Linux CI is the reference. Investigate in Phase 6 (fonts).
+
+### 2026-10-18 (night) - autopilot: A5 signature library
+- `PDFSignatureLibrary` (core): slots, serialization, DPAPI protect/unprotect, load/save
+  (`QSaveFile`, owner-only), `extractSignature` (Otsu with the middle of tied levels, so a
+  clean two-tone scan works; soft edge band; crop + margin; size limit), `toPng`.
+- Plugin: "Signature Library..." dialog (preview on a checkerboard, name, import, clear),
+  import dialog (live preview, threshold slider with Automatic, ink colour), four
+  "Place <name>" tools in the Signature Toolbox (disabled while the slot is empty).
+- Tests: `signatureLibrary`, `signatureExtraction` (noisy and clean scans),
+  `signatureLibraryDialogs`, `signatureImageKeepsTransparency` (the PNG reaches the PDF
+  with its mask, so it does not cover the signature line).

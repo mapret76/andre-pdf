@@ -23,6 +23,7 @@
 #ifndef SIGNATURESPLUGIN_H
 #define SIGNATURESPLUGIN_H
 
+#include "pdfsignaturelibrary.h"
 #include "pdfplugin.h"
 #include "pdfpagecontentelements.h"
 #include "pdfpagecontenteditortools.h"
@@ -63,6 +64,7 @@ private:
     void onSignDigitally();
     void onOpenCertificatesManager();
     void onSceneActivityChanged();
+    void onOpenSignatureLibrary();
 
     void onPenChanged(const QPen& pen);
     void onBrushChanged(const QBrush& brush);
@@ -88,6 +90,11 @@ private:
         Line,
         Dot,
         SvgImage,
+        SignatureSlot1,
+        SignatureSlot2,
+        SignatureSlot3,
+        SignatureSlot4,
+        SignatureLibrary,
         Clear,
 
         // Sign actions
@@ -111,6 +118,10 @@ private:
         LineTool,
         DotTool,
         ImageTool,
+        SignatureSlot1Tool,
+        SignatureSlot2Tool,
+        SignatureSlot3Tool,
+        SignatureSlot4Tool,
         LastTool
     };
 
@@ -124,6 +135,9 @@ private:
 
     QString getSignedFileName() const;
 
+    /// Loads the images of the signature library into the tools placing them
+    void updateSignatureSlots();
+
     /// Reads the saved signed file back and reports what a reader finds in it
     void checkSavedFile(const QString& fileName, const QString& signatureName, const QString& password, bool isDocumentTimestamp);
 
@@ -132,6 +146,7 @@ private:
     pdf::PDFPageContentEditorWidget* m_editorWidget;
 
     pdf::PDFPageContentScene m_scene;
+    pdf::PDFSignatureLibrary m_signatureLibrary;
     bool m_sceneSelectionChangeEnabled;
 };
 

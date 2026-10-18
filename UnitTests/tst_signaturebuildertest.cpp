@@ -29,6 +29,7 @@
 #include "pdfdocumentwriter.h"
 #include "pdfocrapplyprocessor.h"
 #include "pdfsignaturestamp.h"
+#include "pdfsignaturelibrary.h"
 #include "pdfsecurityhandler.h"
 
 #include <QtTest>
@@ -36,6 +37,7 @@
 #include <QTemporaryDir>
 #include <QPainter>
 #include <QProcess>
+#include <QRandomGenerator>
 #include <QStandardPaths>
 #include <QCryptographicHash>
 
@@ -99,6 +101,8 @@ private slots:
     void certificationMustBeFirst();
     void verificationStamp();
     void encryptedCertification();
+    void signatureLibrary();
+    void signatureExtraction();
 
 private:
     static bool createTestCertificate(const QTemporaryDir& directory, PDFCertificateEntry& certificate, QString& password);
@@ -857,6 +861,112 @@ void SignatureBuilderTest::encryptedCertification()
     QCOMPARE(signDocument(document, QByteArray(), certificate, password, "Approval", approved), PDFDocumentSigner::Result::OK);
     QByteArray encrypted;
     QCOMPARE(sign(readDocument(approved), approved, PDFDocumentSigner::Certification::None, encrypted), PDFDocumentSigner::Result::ExistingSignaturesNotPreserved);
+}
+
+void SignatureBuilderTest::signatureLibrary()
+{
+    PDFSignatureLibrary library;
+    for (int i = 0; i < PDFSignatureLibrary::SLOT_COUNT; ++i)
+    {
+        QVERIFY(library.getSlot(i).isEmpty());
+    }
+    QCOMPARE(library.getDisplayName(1), QStringLiteral("Signature 2"));
+
+    QImage image(40, 20, QImage::Format_ARGB32);
+    image.fill(Qt::transparent);
+    library.setSlot(0, { QStringLiteral("Full signature"), PDFSignatureLibrary::toPng(image) });
+    library.setSlot(3, { QStringLiteral("Initials"), PDFSignatureLibrary::toPng(image) });
+
+    PDFSignatureLibrary copy;
+    QVERIFY(copy.deserialize(library.serialize()));
+    for (int i = 0; i < PDFSignatureLibrary::SLOT_COUNT; ++i)
+    {
+        QVERIFY(copy.getSlot(i) == library.getSlot(i));
+    }
+    QCOMPARE(copy.getDisplayName(3), QStringLiteral("Initials"));
+    QVERIFY(!copy.deserialize(QByteArray("garbage")));
+
+    const QByteArray secret("signature bytes");
+    QCOMPARE(PDFSignatureLibrary::unprotect(PDFSignatureLibrary::protect(secret)).value_or(QByteArray()), secret);
+    QVERIFY(!PDFSignatureLibrary::unprotect(QByteArray("unknown")));
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString fileName = directory.filePath(QStringLiteral("sub/library.dat"));
+    PDFSignatureLibrary loaded;
+    QVERIFY(loaded.load(fileName)); // absent file = empty library
+    QVERIFY(library.save(fileName));
+#ifndef Q_OS_WIN
+    QCOMPARE(QFileInfo(fileName).permissions() & (QFile::ReadGroup | QFile::ReadOther), QFile::Permissions());
+#endif
+    QVERIFY(loaded.load(fileName));
+    QVERIFY(loaded.getSlot(0) == library.getSlot(0));
+
+    QFile damaged(fileName);
+    QVERIFY(damaged.open(QFile::WriteOnly | QFile::Truncate));
+    damaged.write("PLAIN1 not a library");
+    damaged.close();
+    QString errorMessage;
+    QVERIFY(!loaded.load(fileName, &errorMessage));
+    QVERIFY(!errorMessage.isEmpty());
+}
+
+void SignatureBuilderTest::signatureExtraction()
+{
+    // A "scan": off-white paper with noise and a dark blue stroke
+    QImage scan(400, 200, QImage::Format_RGB32);
+    QRandomGenerator random(7);
+    for (int y = 0; y < scan.height(); ++y)
+    {
+        for (int x = 0; x < scan.width(); ++x)
+        {
+            const int level = 225 + int(random.bounded(20));
+            scan.setPixel(x, y, qRgb(level, level, level - 10));
+        }
+    }
+    {
+        QPainter painter(&scan);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(QColor(20, 30, 120), 6));
+        painter.drawLine(100, 80, 300, 120);
+    }
+
+    const QImage signature = PDFSignatureLibrary::extractSignature(scan);
+    QVERIFY(!signature.isNull());
+    QVERIFY(signature.hasAlphaChannel());
+
+    // Cropped to the stroke plus a small margin
+    QVERIFY(qAbs(signature.width() - 206) <= 12);
+    QVERIFY(qAbs(signature.height() - 46) <= 12);
+
+    // Paper is transparent, ink is opaque and keeps its colour
+    QCOMPARE(qAlpha(signature.pixel(0, signature.height() - 1)), 0);
+    const QRgb ink = signature.pixel(signature.width() / 2, signature.height() / 2);
+    QCOMPARE(qAlpha(ink), 255);
+    QVERIFY(qBlue(ink) > qRed(ink));
+
+    // The ink colour can be replaced, blank paper gives no signature
+    const QImage black = PDFSignatureLibrary::extractSignature(scan, -1, Qt::black);
+    QCOMPARE(QColor(black.pixel(black.width() / 2, black.height() / 2)).rgb() & 0xFFFFFF, QRgb(0));
+    QImage blank(100, 100, QImage::Format_RGB32);
+    blank.fill(Qt::white);
+    QVERIFY(PDFSignatureLibrary::extractSignature(blank, 128).isNull());
+
+    const int threshold = PDFSignatureLibrary::getAutomaticThreshold(scan.convertToFormat(QImage::Format_Grayscale8));
+    QVERIFY(threshold > 40 && threshold < 225);
+
+    // A clean scan with two levels only: the threshold lies in the middle between them
+    QImage clean(100, 50, QImage::Format_Grayscale8);
+    clean.fill(230);
+    for (int x = 20; x < 80; ++x)
+    {
+        clean.setPixel(x, 25, 20);
+    }
+    const int cleanThreshold = PDFSignatureLibrary::getAutomaticThreshold(clean);
+    QVERIFY2(cleanThreshold > 80 && cleanThreshold < 170, qPrintable(QString::number(cleanThreshold)));
+    const QImage cleanSignature = PDFSignatureLibrary::extractSignature(clean);
+    QVERIFY(!cleanSignature.isNull());
+    QCOMPARE(qAlpha(cleanSignature.pixel(cleanSignature.width() / 2, cleanSignature.height() / 2)), 255);
 }
 
 QTEST_MAIN(SignatureBuilderTest)

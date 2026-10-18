@@ -29,11 +29,15 @@
 #include "pdfpagecontentelements.h"
 #include "pdfwidgetannotation.h"
 #include "pdfwidgetformmanager.h"
+#include "pdfpagecontentprocessor.h"
+#include "pdfsignaturelibrary.h"
 #include "signdialog.h"
+#include "signaturelibrarydialog.h"
 
 #include <QtTest>
 #include <QLineEdit>
 #include <QCheckBox>
+#include <QSlider>
 #include <QComboBox>
 #include <QPainter>
 
@@ -46,6 +50,8 @@ private slots:
     void strokeBounds();
     void dialogMethods();
     void dialogLockAndEncryption();
+    void signatureLibraryDialogs();
+    void signatureImageKeepsTransparency();
     void rendering_data();
     void rendering();
     void fallback_data();
@@ -337,6 +343,87 @@ void SignatureAppearanceTest::dialogLockAndEncryption()
         QCOMPARE(dialog.getCertification(), pdf::PDFDocumentSigner::Certification::None);
         QVERIFY(!dialog.getEncryptionPassword());
     }
+}
+
+void SignatureAppearanceTest::signatureLibraryDialogs()
+{
+    // A scan with a dark stroke on grey paper
+    QImage scan(300, 120, QImage::Format_RGB32);
+    scan.fill(QColor(230, 230, 225));
+    {
+        QPainter painter(&scan);
+        painter.setPen(QPen(QColor(10, 20, 90), 5));
+        painter.drawLine(40, 60, 260, 70);
+    }
+
+    pdfplugin::SignatureImportDialog importDialog(nullptr, scan);
+    QVERIFY(!importDialog.getSignature().isNull());
+    QCOMPARE(qAlpha(importDialog.getSignature().pixel(0, 0)), 0);
+
+    // Moving the threshold to the paper level keeps no ink, the automatic mode is switched off
+    auto* slider = importDialog.findChild<QSlider*>();
+    auto* automatic = importDialog.findChild<QCheckBox*>();
+    QVERIFY(slider && automatic);
+    slider->setValue(1);
+    QVERIFY(!automatic->isChecked());
+    QVERIFY(importDialog.getSignature().isNull());
+    automatic->setChecked(true);
+    QVERIFY(!importDialog.getSignature().isNull());
+
+    pdf::PDFSignatureLibrary library;
+    library.setSlot(2, { QStringLiteral("Initials"), pdf::PDFSignatureLibrary::toPng(importDialog.getSignature()) });
+    pdfplugin::SignatureLibraryDialog libraryDialog(nullptr, library);
+    const QList<QLineEdit*> names = libraryDialog.findChildren<QLineEdit*>();
+    QCOMPARE(names.size(), pdf::PDFSignatureLibrary::SLOT_COUNT);
+    names[0]->setText(QStringLiteral("  Full signature "));
+    const pdf::PDFSignatureLibrary edited = libraryDialog.getLibrary();
+    QCOMPARE(edited.getSlot(0).name, QStringLiteral("Full signature"));
+    QCOMPARE(edited.getSlot(2).png, library.getSlot(2).png);
+    QVERIFY(!libraryDialog.grab().isNull());
+}
+
+void SignatureAppearanceTest::signatureImageKeepsTransparency()
+{
+    // A signature from the library is a PNG with a transparent background. Drawn into
+    // the appearance it must stay transparent (an image with a soft mask), otherwise it
+    // would cover the signature line with a white box.
+    QImage signature(120, 40, QImage::Format_ARGB32);
+    signature.fill(Qt::transparent);
+    {
+        QPainter painter(&signature);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(QColor(0, 0, 120), 4));
+        painter.drawLine(5, 30, 115, 10);
+    }
+
+    PDFPageContentScene scene(nullptr);
+    PDFPageContentImageElement* element = new PDFPageContentImageElement();
+    element->setPageIndex(0);
+    element->setRectangle(QRectF(50, 50, 120, 40));
+    element->setContent(pdf::PDFSignatureLibrary::toPng(signature));
+    QVERIFY(!element->getImage().isNull());
+    scene.addElement(element);
+
+    PDFContentStreamBuilder content(QSizeF(300, 400), PDFContentStreamBuilder::CoordinateSystem::PDF);
+    QPainter* painter = content.begin();
+    PDFColorConvertor convertor;
+    QList<PDFRenderError> errors;
+    PDFTextLayoutGetter nullGetter(nullptr, 0);
+    scene.drawElements(painter, 0, nullGetter, QTransform(), nullptr, convertor, errors);
+    const PDFContentStreamBuilder::ContentStream stream = content.end(painter);
+
+    bool hasImageWithMask = false;
+    const PDFObjectStorage& storage = stream.document.getStorage();
+    for (const PDFObjectStorage::Entry& entry : storage.getObjects())
+    {
+        // Soft edges give a soft mask, an image whose alpha is only on/off a stencil mask
+        const PDFDictionary* dictionary = entry.object.isStream() ? entry.object.getStream()->getDictionary() : nullptr;
+        if (dictionary && dictionary->get("Subtype") == PDFObject::createName("Image") && (dictionary->hasKey("SMask") || dictionary->hasKey("Mask")))
+        {
+            hasImageWithMask = true;
+        }
+    }
+    QVERIFY(hasImageWithMask);
 }
 
 QTEST_MAIN(SignatureAppearanceTest)
