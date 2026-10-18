@@ -32,6 +32,7 @@
 #include "pdfsignaturelibrary.h"
 #include "pdfpageinitials.h"
 #include "pdfsignaturelinefinder.h"
+#include "pdfcontractpack.h"
 #include "pdfrenderer.h"
 #include "pdfcms.h"
 #include "pdffont.h"
@@ -113,6 +114,7 @@ private slots:
     void initialsOnEveryPage();
     void signatureLineLabels();
     void signatureLineFinder();
+    void contractPack();
 
 private:
     static bool createTestCertificate(const QTemporaryDir& directory, PDFCertificateEntry& certificate, QString& password);
@@ -1162,6 +1164,100 @@ void SignatureBuilderTest::signatureLineFinder()
     QCOMPARE(lines[3].pageIndex, PDFInteger(1));
     QCOMPARE(lines[3].source, PDFSignatureLineFinder::Source::SignatureField);
     QCOMPARE(lines[3].fieldName, QStringLiteral("Buyer"));
+}
+
+void SignatureBuilderTest::contractPack()
+{
+    // Six pages: two contracts of three pages, each numbered "Page n of 3"
+    PDFDocumentBuilder builder;
+    for (int i = 0; i < 6; ++i)
+    {
+        const PDFObjectReference page = builder.appendPage(QRectF(0, 0, 595, 842));
+        PDFPageContentStreamBuilder content(&builder, PDFContentStreamBuilder::CoordinateSystem::Qt, PDFPageContentStreamBuilder::Mode::Replace);
+        QPainter* painter = content.begin(page);
+        QFont font("DejaVu Sans");
+        font.setPixelSize(10);
+        painter->setFont(font);
+        painter->drawText(QPointF(60, 80), i < 3 ? QStringLiteral("SALE AGREEMENT") : QStringLiteral("LEASE AGREEMENT"));
+        painter->drawText(QPointF(260, 820), QString("Page %1 of 3").arg(i % 3 + 1));
+        if (i % 3 == 2)
+        {
+            painter->drawText(QPointF(60, 600), QStringLiteral("Signature: ________________________"));
+        }
+        content.end(painter);
+    }
+    const PDFDocument document = builder.build();
+
+    using Part = PDFContractPack::Part;
+    const PDFContractPack::Parts suggested = PDFContractPack::suggestFromPageNumbers(&document);
+    QCOMPARE(suggested.size(), size_t(2));
+    QCOMPARE(suggested[0].firstPage, PDFInteger(0));
+    QCOMPARE(suggested[0].lastPage, PDFInteger(2));
+    QCOMPARE(suggested[1].firstPage, PDFInteger(3));
+    QCOMPARE(suggested[1].lastPage, PDFInteger(5));
+    QVERIFY(PDFContractPack::suggestFromOutline(&document).empty());
+    QCOMPARE(PDFContractPack::toText(suggested), QStringLiteral("1-3, 4-6"));
+
+    QString errorMessage;
+    QCOMPARE(PDFContractPack::parse(QStringLiteral("1-3, 4-6"), 6, &errorMessage).size(), size_t(2));
+    QVERIFY(errorMessage.isEmpty());
+    QVERIFY(PDFContractPack::parse(QStringLiteral("1-3, 3-6"), 6, &errorMessage).empty());
+    QVERIFY(!errorMessage.isEmpty());
+    QVERIFY(PDFContractPack::parse(QStringLiteral("1-7"), 6, &errorMessage).empty());
+    QVERIFY(PDFContractPack::parse(QStringLiteral("a-b"), 6, &errorMessage).empty());
+
+    const PDFContractPack::Parts fromStarts = PDFContractPack::fromStartPages({ 4, 2, 2 }, 6, { QStringLiteral("Lease"), QStringLiteral("Sale"), QStringLiteral("dup") });
+    QCOMPARE(fromStarts.size(), size_t(3));
+    QCOMPARE(fromStarts[0], (Part{ QStringLiteral("Part 1"), 0, 1 }));
+    QCOMPARE(fromStarts[1], (Part{ QStringLiteral("Sale"), 2, 3 }));
+    QCOMPARE(fromStarts[2], (Part{ QStringLiteral("Lease"), 4, 5 }));
+    QCOMPARE(PDFContractPack::getFileName(QStringLiteral("Pack"), Part{ QStringLiteral("Sale: A/B"), 0, 1 }, 0), QStringLiteral("Pack - 01 Sale A B.pdf"));
+
+    // The second contract on its own, signed and certified with a visible signature
+    const PDFDocument lease = PDFContractPack::extract(&document, suggested[1]);
+    QCOMPARE(lease.getCatalog()->getPageCount(), size_t(3));
+    const std::vector<PDFSignatureLineFinder::SignatureLine> lines = PDFSignatureLineFinder::find(&lease);
+    QCOMPARE(lines.size(), size_t(1));
+    QCOMPARE(lines[0].pageIndex, PDFInteger(2));
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    PDFCertificateEntry certificate;
+    QString password;
+    QVERIFY(createTestCertificate(directory, certificate, password));
+    certificate.info.setName(PDFCertificateInfo::CommonName, QStringLiteral("Batch Signer"));
+
+    QImage signature(120, 40, QImage::Format_ARGB32);
+    signature.fill(Qt::transparent);
+    QPainter(&signature).fillRect(10, 10, 100, 20, Qt::darkBlue);
+
+    PDFDocumentSigner::Parameters parameters;
+    parameters.document = &lease;
+    parameters.certification = PDFDocumentSigner::Certification::NoChanges;
+    parameters.signFunction = [&](const QByteArray& data, QByteArray& result) { return PDFSignatureFactory::sign(certificate, password, data, result); };
+    parameters.createSignatureFieldFunction = PDFSignatureStamp::createVisibleSignatureField(&lease, QStringLiteral("Lease signature"), lines[0].pageIndex, lines[0].rectangle, signature,
+                                                                                            PDFSignatureStamp::create(certificate.info, parameters.signingTime, parameters.certification, QByteArray()));
+    QByteArray signedLease;
+    QCOMPARE(PDFDocumentSigner::sign(parameters, signedLease), PDFDocumentSigner::Result::OK);
+
+    const PDFDocumentSigner::SignedFileCheck check = PDFDocumentSigner::checkSignedFile(signedLease, QStringLiteral("Lease signature"), QString());
+    QVERIFY(check.isOK());
+    QCOMPARE(check.certification, PDFDocumentSigner::Certification::NoChanges);
+
+    // The field is visible on the page of the line, with an appearance stream
+    const PDFDocument signedDocument = readDocument(signedLease);
+    const PDFForm form = PDFForm::parse(&signedDocument, signedDocument.getCatalog()->getFormObject());
+    bool hasAppearance = false;
+    form.apply([&](const PDFFormField* field)
+    {
+        for (const PDFFormWidget& widget : field->getWidgets())
+        {
+            const PDFDictionary* widgetDictionary = signedDocument.getDictionaryFromObject(signedDocument.getObjectByReference(widget.getWidget()));
+            hasAppearance = hasAppearance || (widgetDictionary && widgetDictionary->hasKey("AP") &&
+                                              signedDocument.getCatalog()->getPageIndexFromPageReference(widget.getPage()) == 2);
+        }
+    });
+    QVERIFY(hasAppearance);
 }
 
 QTEST_MAIN(SignatureBuilderTest)

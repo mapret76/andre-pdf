@@ -25,5 +25,6 @@
         <file>signature-library.svg</file>
         <file>initial-pages.svg</file>
         <file>sign-contract.svg</file>
+        <file>sign-pack.svg</file>
     </qresource>
 </RCC>

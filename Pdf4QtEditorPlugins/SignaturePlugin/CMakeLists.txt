@@ -27,6 +27,7 @@ add_library(SignaturePlugin SHARED
     signaturelibrarydialog.cpp
     initialsdialog.cpp
     contractsigningdialog.cpp
+    packsigningdialog.cpp
     icons.qrc
 )
 

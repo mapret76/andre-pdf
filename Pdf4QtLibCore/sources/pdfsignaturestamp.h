@@ -30,6 +30,9 @@
 #include <QCoreApplication>
 #include <QRectF>
 #include <QStringList>
+#include <QImage>
+
+#include <optional>
 
 #include <vector>
 
@@ -90,6 +93,23 @@ public:
     /// \param rect Rectangle of the stamp, of the size from getSize
     /// \param data Data of the stamp
     static void draw(QPainter* painter, const QRectF& rect, const Data& data);
+
+    /// Returns a function, which creates a visible signature field for the signer:
+    /// the image fitted into the rectangle and the stamp under it (over it, when the
+    /// page has no room under it). Used, where no interactive scene draws the
+    /// appearance, for example when a contract pack is signed in a batch.
+    /// \param document Document being signed
+    /// \param fieldName Name of the signature field
+    /// \param pageIndex Page of the field
+    /// \param imageRectangle Rectangle of the image, page coordinates (y up)
+    /// \param image Signature image, can be null (stamp only)
+    /// \param stamp Verification stamp, none for no stamp
+    static PDFDocumentSigner::CreateSignatureFieldFunction createVisibleSignatureField(const PDFDocument* document,
+                                                                                       QString fieldName,
+                                                                                       PDFInteger pageIndex,
+                                                                                       QRectF imageRectangle,
+                                                                                       QImage image,
+                                                                                       std::optional<Data> stamp);
 
     /// Formats the fingerprint as groups of four hexadecimal digits
     /// \param hash Hash

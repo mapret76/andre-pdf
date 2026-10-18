@@ -53,6 +53,8 @@ add_library(Pdf4QtLibCore SHARED
     sources/pdfpageinitials.h
     sources/pdfsignaturelinefinder.cpp
     sources/pdfsignaturelinefinder.h
+    sources/pdfcontractpack.cpp
+    sources/pdfcontractpack.h
     sources/pdfsignaturelibrary.cpp
     sources/pdfsignaturelibrary.h
     sources/pdfsignaturestamp.cpp

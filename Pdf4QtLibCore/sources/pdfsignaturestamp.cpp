@@ -23,6 +23,9 @@
 #include "pdfsignaturestamp.h"
 #include "pdfcertificatestore.h"
 #include "qrcodegen/qrcodegen.hpp"
+#include "pdfdocument.h"
+#include "pdfdocumentbuilder.h"
+#include "pdfpage.h"
 
 #include <QFont>
 #include <QPainter>
@@ -207,6 +210,73 @@ void PDFSignatureStamp::draw(QPainter* painter, const QRectF& rect, const Data& 
                       Qt::AlignLeft | Qt::AlignTop, getTextLines(data).join('\n'));
 
     painter->restore();
+}
+
+PDFDocumentSigner::CreateSignatureFieldFunction PDFSignatureStamp::createVisibleSignatureField(const PDFDocument* document,
+                                                                                              QString fieldName,
+                                                                                              PDFInteger pageIndex,
+                                                                                              QRectF imageRectangle,
+                                                                                              QImage image,
+                                                                                              std::optional<Data> stamp)
+{
+    return [=](PDFDocumentBuilder& builder, PDFObjectReference signatureDictionary)
+    {
+        const PDFPage* page = document->getCatalog()->getPage(pageIndex);
+        Q_ASSERT(page);
+
+        // The temporary page of the content builder starts at zero, the form keeps
+        // its bounding box in that space (as the signature plugin does)
+        const QPointF mediaOrigin = page->getMediaBox().topLeft();
+        PDFContentStreamBuilder contentBuilder(page->getMediaBox().size(), PDFContentStreamBuilder::CoordinateSystem::PDF);
+        QPainter* painter = contentBuilder.begin();
+        painter->translate(-mediaOrigin);
+
+        QRectF boundingRectangle = imageRectangle;
+        if (!image.isNull())
+        {
+            painter->save();
+            painter->translate(imageRectangle.left(), imageRectangle.bottom());
+            painter->scale(1.0, -1.0);
+            painter->drawImage(QRectF(0, 0, imageRectangle.width(), imageRectangle.height()), image);
+            painter->restore();
+        }
+
+        if (stamp)
+        {
+            const QSizeF stampSize = getSize(*stamp);
+            QRectF stampRectangle(imageRectangle.left(), imageRectangle.top() - stampSize.height(), stampSize.width(), stampSize.height());
+            if (stampRectangle.top() < page->getMediaBox().top())
+            {
+                stampRectangle.moveTop(imageRectangle.bottom());
+            }
+            draw(painter, stampRectangle, *stamp);
+            boundingRectangle = boundingRectangle.united(stampRectangle);
+        }
+
+        const PDFContentStreamBuilder::ContentStream contentStream = contentBuilder.end(painter);
+        const std::vector<PDFObject> copiedObjects = builder.copyFrom({ contentStream.resources, contentStream.contents }, contentStream.document.getStorage(), true);
+        Q_ASSERT(copiedObjects.size() == 2);
+        const PDFObjectReference formReference = copiedObjects[1].getReference();
+
+        PDFObjectFactory formFactory;
+        formFactory.beginDictionary();
+        formFactory.beginDictionaryItem("Type");
+        formFactory << WrapName("XObject");
+        formFactory.endDictionaryItem();
+        formFactory.beginDictionaryItem("Subtype");
+        formFactory << WrapName("Form");
+        formFactory.endDictionaryItem();
+        formFactory.beginDictionaryItem("BBox");
+        formFactory << boundingRectangle.translated(-mediaOrigin);
+        formFactory.endDictionaryItem();
+        formFactory.beginDictionaryItem("Resources");
+        formFactory << copiedObjects[0].getReference();
+        formFactory.endDictionaryItem();
+        formFactory.endDictionary();
+        builder.mergeTo(formReference, formFactory.takeObject());
+
+        return builder.createSignatureField(fieldName, signatureDictionary, page->getPageReference(), formReference, boundingRectangle);
+    };
 }
 
 }   // namespace pdf

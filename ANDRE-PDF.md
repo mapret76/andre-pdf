@@ -38,7 +38,7 @@ Queue:
 - [x] A5 Phase 3.1: signature library - 4 slots, import from a scanned image (background removed), DPAPI-protected on Windows
 - [x] A6 Phase 3.2: initial every page (chosen slot, position, skip pages)
 - [x] A7 Phase 3.3: find signature lines (existing fields, "Signature"/"Signed" labels, underscores), sign several, checklist; Lock disabled until all are signed; the last one locks (field /Lock /P)
-- [ ] A8 Phase 3.4: split a contract pack (by bookmarks / page ranges / detected first pages) + batch initial-sign-lock
+- [x] A8 Phase 3.4: split a contract pack (by bookmarks / page ranges / detected first pages) + batch initial-sign-lock
 - [ ] A9 Phase 4.1: size reduction before signing (on PDFOptimizer + image optimizer), blocked after the first signature
 - [ ] A10 Phase 4.2: export to Word (open in M365 Word) and Excel (tables -> .xlsx)
 - [ ] A11 Phase 4.3: Share: Windows Share sheet (email/WhatsApp), mail with attachment
@@ -57,6 +57,8 @@ Waiting on Andre:
   github.com/login/device. Until then the MSI keeps the file name `JakubMelka.PDF4QT_<version>.msi`.
 - Phase 1 gate: install the MSI and open his PDFs.
 - Phase 2 gate: certify a PDF with his own certificate, check it in Acrobat Reader.
+- Phase 3 gate: a real contract pack: Signature Library (import his four signatures),
+  Split && Sign Contract Pack, open each file in Acrobat Reader.
 
 ## Requirements (as Andre stated them, 2026-10-17/18)
 
@@ -353,3 +355,21 @@ upstream author's machine, not ours).
 - Plugin "Sign Contract...": the checklist dialog (`ContractSigningDialog`, double-click
   shows the page, "I sign all"), images on the lines, the last line in the scene, then the
   Sign dialog with the lock level preset. Test `contractSigningChecklist`.
+
+### 2026-10-18 (night) - autopilot: A8 split and sign a contract pack
+- `PDFContractPack` (core): parts from the top level bookmarks, from the page numbering
+  restarting at "Page 1 of N" / "1 of N" / "1/N" / "Bladsy 1 van N", or from page ranges
+  (checked for the document and for overlaps); extraction of a part as its own document;
+  safe file names.
+- `PDFSignatureStamp::createVisibleSignatureField` (core): a visible signature field from an
+  image and the stamp, with no interactive scene (for batches, and later Android).
+- Plugin "Split && Sign Contract Pack...": parts table (bookmarks by default, page numbers
+  or ranges on demand), initials slot (not the last page of each contract by default),
+  signature slot, "every line" or "only lines labelled with ...", output folder and name.
+  One Sign dialog for the certificate and password, then for each part, in the order of
+  the rules: extract -> initial -> images on the lines -> certify with the visible signature
+  on the last line (P=2, when lines are left for another party) -> write (never over an
+  existing file) -> read back and check; a report lists every contract.
+- Tests: `contractPack` (split, extract, sign the part with a visible field, check) and
+  `packSigningDialog`. **Phase 3 is complete in code.** Its gate (a real three-contract
+  pack in Acrobat Reader) waits for Andre.

@@ -35,11 +35,13 @@
 #include "signaturelibrarydialog.h"
 #include "initialsdialog.h"
 #include "contractsigningdialog.h"
+#include "packsigningdialog.h"
 
 #include <QtTest>
 #include <QLineEdit>
 #include <QCheckBox>
 #include <QSlider>
+#include <QTemporaryDir>
 #include <QTableWidget>
 #include <QPushButton>
 #include <QTimer>
@@ -60,6 +62,7 @@ private slots:
     void signatureImageKeepsTransparency();
     void initialsDialog();
     void contractSigningChecklist();
+    void packSigningDialog();
     void rendering_data();
     void rendering();
     void fallback_data();
@@ -519,6 +522,48 @@ void SignatureAppearanceTest::contractSigningChecklist()
         empty.setDecision(i, Decision::Sign);
     }
     QVERIFY(!empty.isComplete());
+}
+
+void SignatureAppearanceTest::packSigningDialog()
+{
+    PDFDocumentBuilder builder;
+    for (int i = 0; i < 6; ++i)
+    {
+        builder.appendPage(QRectF(0, 0, 300, 400));
+    }
+    const PDFDocument document = builder.build();
+
+    pdf::PDFSignatureLibrary library;
+    QImage image(10, 10, QImage::Format_ARGB32);
+    image.fill(Qt::black);
+    library.setSlot(0, { QStringLiteral("Signature"), pdf::PDFSignatureLibrary::toPng(image) });
+    library.setSlot(3, { QStringLiteral("Initials"), pdf::PDFSignatureLibrary::toPng(image) });
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    pdfplugin::PackSigningDialog dialog(nullptr, &document, library, directory.filePath("Pack.pdf"));
+
+    // Without bookmarks: one part, the whole document
+    QCOMPARE(dialog.getParts().size(), size_t(1));
+    QCOMPARE(dialog.getParts().front().lastPage, pdf::PDFInteger(5));
+    QCOMPARE(dialog.getBaseName(), QStringLiteral("Pack SIGNED"));
+    QCOMPARE(dialog.getInitialsSlot(), 3);
+    QCOMPARE(dialog.getSignatureSlot(), 0);
+    QVERIFY(dialog.getLineFilter().isEmpty());
+
+    dialog.setParts(pdf::PDFContractPack::fromStartPages({ 0, 2 }, 6, { QStringLiteral("Sale"), QStringLiteral("Lease") }));
+    QCOMPARE(dialog.getParts().size(), size_t(2));
+    QCOMPARE(dialog.getParts()[1].name, QStringLiteral("Lease"));
+    QCOMPARE(dialog.getParts()[1].firstPage, pdf::PDFInteger(2));
+
+    dialog.accept();
+    QCOMPARE(dialog.result(), int(QDialog::Accepted));
+
+    // A missing folder keeps the dialog open
+    pdfplugin::PackSigningDialog missingFolder(nullptr, &document, library, directory.filePath("missing/Pack.pdf"));
+    QTimer::singleShot(0, []() { if (QWidget* box = QApplication::activeModalWidget()) { box->close(); } });
+    missingFolder.accept();
+    QVERIFY(missingFolder.result() != int(QDialog::Accepted));
 }
 
 QTEST_MAIN(SignatureAppearanceTest)

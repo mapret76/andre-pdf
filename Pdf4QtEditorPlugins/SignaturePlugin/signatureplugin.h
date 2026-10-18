@@ -68,6 +68,7 @@ private:
     void onOpenSignatureLibrary();
     void onInitialPages();
     void onSignContract();
+    void onSignPack();
 
     void onPenChanged(const QPen& pen);
     void onBrushChanged(const QBrush& brush);
@@ -100,6 +101,7 @@ private:
         SignatureLibrary,
         InitialPages,
         SignContract,
+        SignPack,
         Clear,
 
         // Sign actions

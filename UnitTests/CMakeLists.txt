@@ -448,6 +448,7 @@ if(NOT PDF4QT_BUILD_ONLY_CORE_LIBRARY)
         ../Pdf4QtEditorPlugins/SignaturePlugin/signaturelibrarydialog.cpp
         ../Pdf4QtEditorPlugins/SignaturePlugin/initialsdialog.cpp
         ../Pdf4QtEditorPlugins/SignaturePlugin/contractsigningdialog.cpp
+        ../Pdf4QtEditorPlugins/SignaturePlugin/packsigningdialog.cpp
     )
     target_include_directories(UnitTestsSignatureAppearance PRIVATE ${CMAKE_SOURCE_DIR}/Pdf4QtEditorPlugins/SignaturePlugin)
     target_link_libraries(UnitTestsSignatureAppearance PRIVATE Pdf4QtLibWidgets Pdf4QtLibCore Qt6::Widgets Qt6::Test)

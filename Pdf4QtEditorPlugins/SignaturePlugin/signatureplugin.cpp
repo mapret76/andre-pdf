@@ -33,6 +33,8 @@
 #include "signaturelibrarydialog.h"
 #include "initialsdialog.h"
 #include "contractsigningdialog.h"
+#include "packsigningdialog.h"
+#include "pdfcontractpack.h"
 #include "pdfsignaturelinefinder.h"
 #include "pdfpageinitials.h"
 
@@ -94,6 +96,9 @@ void SignaturePlugin::setWidget(pdf::PDFWidget* widget)
     QAction* signContractAction = new QAction(QIcon(":/pdfplugins/signatureplugin/sign-contract.svg"), tr("Sign &Contract..."), this);
     signContractAction->setObjectName("signaturetool_signContractAction");
     m_actions[SignContract] = signContractAction;
+    QAction* signPackAction = new QAction(QIcon(":/pdfplugins/signatureplugin/sign-pack.svg"), tr("Split && Sign Contract &Pack..."), this);
+    signPackAction->setObjectName("signaturetool_signPackAction");
+    m_actions[SignPack] = signPackAction;
     QAction* clearAction = new QAction(QIcon(":/pdfplugins/signatureplugin/clear.svg"), tr("Clear All &Graphics"), this);
     QAction* signElectronicallyAction = new QAction(QIcon(":/pdfplugins/signatureplugin/sign-electronically.svg"), tr("Sign &Electronically"), this);
     QAction* signDigitallyAction = new QAction(QIcon(":/pdfplugins/signatureplugin/sign-digitally.svg"), tr("Sign Digitally &With Certificate"), this);
@@ -206,6 +211,7 @@ void SignaturePlugin::setWidget(pdf::PDFWidget* widget)
     connect(signatureLibraryAction, &QAction::triggered, this, &SignaturePlugin::onOpenSignatureLibrary);
     connect(initialPagesAction, &QAction::triggered, this, &SignaturePlugin::onInitialPages);
     connect(signContractAction, &QAction::triggered, this, &SignaturePlugin::onSignContract);
+    connect(signPackAction, &QAction::triggered, this, &SignaturePlugin::onSignPack);
     connect(m_widget, &pdf::PDFWidget::sceneActivityChanged, this, &SignaturePlugin::onSceneActivityChanged);
 
     updateActions();
@@ -233,6 +239,7 @@ std::vector<QAction*> SignaturePlugin::getActions() const
     result.push_back(m_actions[SignatureLibrary]);
     result.push_back(m_actions[InitialPages]);
     result.push_back(m_actions[SignContract]);
+    result.push_back(m_actions[SignPack]);
 
     return result;
 }
@@ -797,6 +804,192 @@ void SignaturePlugin::onSignContract()
     m_suggestedCertification.reset();
 }
 
+void SignaturePlugin::onSignPack()
+{
+    Q_ASSERT(m_document);
+
+    if (pdf::PDFDocumentSigner::hasExistingSignatures(m_document))
+    {
+        QMessageBox::information(m_widget, tr("Split and Sign Contract Pack"), tr("The pack is already signed, splitting it would break the signatures."));
+        return;
+    }
+
+    PackSigningDialog packDialog(m_dataExchangeInterface->getMainWindow(), m_document, m_signatureLibrary, m_dataExchangeInterface->getOriginalFileName());
+    if (packDialog.exec() != QDialog::Accepted)
+    {
+        return;
+    }
+
+    if (pdf::PDFCertificateManager::getCertificates(pdf::PDFCertificateUsageFilter::DigitalSignature).empty())
+    {
+        onOpenCertificatesManager();
+    }
+
+    // One certificate, one password for the whole pack
+    SignDialog signDialog(m_dataExchangeInterface->getMainWindow(), false, true);
+    signDialog.setCertification(pdf::PDFDocumentSigner::Certification::NoChanges);
+    if (signDialog.exec() != QDialog::Accepted)
+    {
+        return;
+    }
+    if (signDialog.getSignatureType() == SignDialog::TimestampOnly || !signDialog.getCertificate())
+    {
+        QMessageBox::critical(m_widget, tr("Split and Sign Contract Pack"), tr("Choose a signature with your certificate, a document timestamp alone does not sign the contracts."));
+        return;
+    }
+
+    const pdf::PDFCertificateEntry* certificate = signDialog.getCertificate();
+    QImage signature;
+    signature.loadFromData(m_signatureLibrary.getSlot(packDialog.getSignatureSlot()).png, "PNG");
+    QImage initials;
+    if (packDialog.getInitialsSlot() >= 0)
+    {
+        initials.loadFromData(m_signatureLibrary.getSlot(packDialog.getInitialsSlot()).png, "PNG");
+    }
+
+    QString timestampErrorMessage;
+    pdf::PDFSignatureFactory::TimestampSettings timestampSettings;
+    timestampSettings.url = signDialog.getTimestampUrl();
+    pdf::PDFDocumentSigner::SignFunction signFunction;
+    if (signDialog.getSignatureType() == SignDialog::SignatureWithTimestamp)
+    {
+        signFunction = [certificate, &signDialog, timestampSettings, &timestampErrorMessage](const QByteArray& data, QByteArray& result)
+        {
+            return pdf::PDFSignatureFactory::signWithTimestamp(*certificate, signDialog.getPassword(), data, timestampSettings, result, timestampErrorMessage);
+        };
+    }
+    else
+    {
+        signFunction = [certificate, &signDialog](const QByteArray& data, QByteArray& result)
+        {
+            return pdf::PDFSignatureFactory::sign(*certificate, signDialog.getPassword(), data, result);
+        };
+    }
+
+    QStringList report;
+    int failures = 0;
+    const pdf::PDFContractPack::Parts parts = packDialog.getParts();
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    for (size_t partIndex = 0; partIndex < parts.size(); ++partIndex)
+    {
+        const pdf::PDFContractPack::Part& part = parts[partIndex];
+        pdf::PDFDocumentPointer document(new pdf::PDFDocument(pdf::PDFContractPack::extract(m_document, part)));
+        if (!document->getCatalog() || document->getCatalog()->getPageCount() == 0)
+        {
+            report << tr("%1: the pages could not be extracted.").arg(part.name);
+            ++failures;
+            continue;
+        }
+
+        // Order of the rules: split -> initial -> sign the lines -> lock last
+        if (!initials.isNull())
+        {
+            pdf::PDFPageInitials::Settings settings;
+            if (packDialog.isLastPageSkippedByInitials() && document->getCatalog()->getPageCount() > 1)
+            {
+                settings.skippedPages.insert(pdf::PDFInteger(document->getCatalog()->getPageCount()) - 1);
+            }
+            if (pdf::PDFDocumentPointer initialled = pdf::PDFPageInitials::apply(document.data(), initials, settings))
+            {
+                document = initialled;
+            }
+        }
+
+        const QString filter = packDialog.getLineFilter();
+        std::vector<pdf::PDFPageInitials::Placement> placements;
+        size_t otherLines = 0;
+        for (const pdf::PDFSignatureLineFinder::SignatureLine& line : pdf::PDFSignatureLineFinder::find(document.data()))
+        {
+            if (filter.isEmpty() || line.label.contains(filter, Qt::CaseInsensitive) || line.fieldName.contains(filter, Qt::CaseInsensitive))
+            {
+                placements.push_back({ line.pageIndex, line.rectangle });
+            }
+            else
+            {
+                ++otherLines;
+            }
+        }
+        if (placements.empty())
+        {
+            report << tr("%1: no signature line of yours was found, the contract was not signed.").arg(part.name);
+            ++failures;
+            continue;
+        }
+
+        const pdf::PDFPageInitials::Placement lastPlacement = placements.back();
+        placements.pop_back();
+        if (!placements.empty())
+        {
+            if (pdf::PDFDocumentPointer drawn = pdf::PDFPageInitials::drawImages(document.data(), signature, placements))
+            {
+                document = drawn;
+            }
+        }
+
+        pdf::PDFDocumentSigner::Parameters parameters;
+        parameters.document = document.data();
+        parameters.certification = signDialog.getCertification();
+        if (otherLines > 0 && parameters.certification == pdf::PDFDocumentSigner::Certification::NoChanges)
+        {
+            // The other party must still be able to sign
+            parameters.certification = pdf::PDFDocumentSigner::Certification::FormFilling;
+        }
+        parameters.encryptionUserPassword = signDialog.getEncryptionPassword();
+        parameters.signFunction = signFunction;
+
+        const pdf::PDFPage* lastPage = document->getCatalog()->getPage(lastPlacement.pageIndex);
+        const QRectF imageRectangle = pdf::PDFPageInitials::getDisplayToPageTransform(lastPage).mapRect(pdf::PDFPageInitials::getFittedDisplayRectangle(lastPage, lastPlacement.area, signature.size()));
+        const QString fieldName = QString("andrepdf_signature_%1").arg(QDateTime::currentMSecsSinceEpoch());
+        parameters.createSignatureFieldFunction = pdf::PDFSignatureStamp::createVisibleSignatureField(document.data(), fieldName, lastPlacement.pageIndex, imageRectangle, signature,
+                                                                                                     pdf::PDFSignatureStamp::create(certificate->info, parameters.signingTime, parameters.certification, QByteArray()));
+
+        QByteArray signedDocument;
+        timestampErrorMessage.clear();
+        const pdf::PDFDocumentSigner::Result result = pdf::PDFDocumentSigner::sign(parameters, signedDocument);
+        if (result != pdf::PDFDocumentSigner::Result::OK)
+        {
+            report << tr("%1: %2").arg(part.name, !timestampErrorMessage.isEmpty() ? timestampErrorMessage : pdf::PDFDocumentSigner::getResultMessage(result));
+            ++failures;
+            continue;
+        }
+
+        // Existing files are never overwritten
+        QString fileName = packDialog.getOutputDirectory() + "/" + pdf::PDFContractPack::getFileName(packDialog.getBaseName(), part, partIndex);
+        for (int attempt = 2; QFile::exists(fileName); ++attempt)
+        {
+            fileName = packDialog.getOutputDirectory() + "/" + pdf::PDFContractPack::getFileName(packDialog.getBaseName(), part, partIndex).chopped(4) + QString(" (%1).pdf").arg(attempt);
+        }
+        QFile file(fileName);
+        if (!file.open(QFile::WriteOnly) || file.write(signedDocument) != signedDocument.size() || !file.flush())
+        {
+            report << tr("%1: the file %2 could not be written.").arg(part.name, QDir::toNativeSeparators(fileName));
+            ++failures;
+            continue;
+        }
+        file.close();
+
+        const pdf::PDFDocumentSigner::SignedFileCheck check = pdf::PDFDocumentSigner::checkSignedFile(signedDocument, fieldName, parameters.encryptionUserPassword.value_or(QString()));
+        report << tr("%1: %2 lines signed, %3 left for another party, %4 - %5")
+                      .arg(part.name).arg(placements.size() + 1).arg(otherLines)
+                      .arg(check.isOK() ? pdf::PDFSignatureStamp::getCertificationText(check.certification) : tr("CHECK FAILED"))
+                      .arg(QFileInfo(fileName).fileName());
+        failures += check.isOK() ? 0 : 1;
+    }
+    QApplication::restoreOverrideCursor();
+
+    const QString title = tr("Split and Sign Contract Pack");
+    const QString message = tr("%1 of %2 contracts signed and locked in %3:\n\n%4").arg(parts.size() - failures).arg(parts.size())
+                                .arg(QDir::toNativeSeparators(packDialog.getOutputDirectory()), report.join('\n'));
+    if (failures > 0)
+    {
+        QMessageBox::warning(m_widget, title, message);
+    }
+    else
+    {
+        QMessageBox::information(m_widget, title, message);
+    }
+}
+
 void SignaturePlugin::updateSignatureSlots()
 {
     for (int i = 0; i < pdf::PDFSignatureLibrary::SLOT_COUNT; ++i)
@@ -939,6 +1132,7 @@ void SignaturePlugin::updateActions()
         m_actions[SignDigitally]->setEnabled(m_document && m_widget && !m_widget->isAnySceneActive(&m_scene));
         m_actions[InitialPages]->setEnabled(m_document && m_widget && !m_widget->isAnySceneActive(&m_scene));
         m_actions[SignContract]->setEnabled(m_document && m_widget && !m_widget->isAnySceneActive(&m_scene));
+        m_actions[SignPack]->setEnabled(m_document && m_widget && !m_widget->isAnySceneActive(&m_scene));
         return;
     }
 
@@ -958,6 +1152,7 @@ void SignaturePlugin::updateActions()
     m_actions[SignatureLibrary]->setEnabled(true);
     m_actions[InitialPages]->setEnabled(m_document);
     m_actions[SignContract]->setEnabled(m_document);
+    m_actions[SignPack]->setEnabled(m_document);
 
     // Clear action
     QAction* clearAction = m_actions[Clear];
