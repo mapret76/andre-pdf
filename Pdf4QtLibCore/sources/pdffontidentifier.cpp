@@ -214,7 +214,19 @@ PDFFontIdentifier::FontName PDFFontIdentifier::parsePdfFontName(const QByteArray
         }
     }
 
-    // CamelCase to words ("OpenSans" -> "Open Sans")
+    // An installed family of the same letters is the family ("DejaVuSerif" -> "DejaVu Serif")
+    auto squeeze = [](QString text) { return text.remove(QChar(' ')).remove(QChar('-')).toLower(); };
+    const QString squeezed = squeeze(name);
+    for (const QString& family : getLatinFamilies())
+    {
+        if (squeeze(family) == squeezed)
+        {
+            result.family = family;
+            return result;
+        }
+    }
+
+    // Otherwise CamelCase to words ("OpenSans" -> "Open Sans")
     static const QRegularExpression camelCase(QStringLiteral("(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])"));
     result.family = name.split(camelCase, Qt::SkipEmptyParts).join(QChar(' ')).simplified();
     return result;
@@ -251,12 +263,16 @@ QStringList PDFFontIdentifier::getMetricCompatibleSubstitutes(const QString& fam
 QStringList PDFFontIdentifier::getLatinFamilies()
 {
     static const QRegularExpression foundry(QStringLiteral("\\s*\\[[^\\]]*\\]$"));
+    // Generic names of fontconfig are aliases of real fonts, not fonts
+    static const QStringList generic = { QStringLiteral("Serif"), QStringLiteral("Sans Serif"), QStringLiteral("Sans"), QStringLiteral("Monospace"),
+                                         QStringLiteral("Mono"), QStringLiteral("System-ui"), QStringLiteral("Cursive"), QStringLiteral("Fantasy"), QStringLiteral("Emoji") };
     QStringList result;
     for (const QString& family : QFontDatabase::families(QFontDatabase::Latin))
     {
-        if (!QFontDatabase::isPrivateFamily(family) && !QFontDatabase::writingSystems(family).contains(QFontDatabase::Symbol))
+        const QString name = QString(family).remove(foundry);
+        if (!QFontDatabase::isPrivateFamily(family) && !QFontDatabase::writingSystems(family).contains(QFontDatabase::Symbol) && !generic.contains(name, Qt::CaseInsensitive))
         {
-            result << QString(family).remove(foundry);
+            result << name;
         }
     }
     result.removeDuplicates();
@@ -392,7 +408,9 @@ std::vector<PDFFontIdentifier::Match> PDFFontIdentifier::matchScan(const QImage&
                 match.bold = bold;
                 match.italic = italic;
                 match.score = shape * widthLikeness;
-                match.pixelSize = renderPixelSize * double(scanInkHeight) / double(qMax(1.0, std::ceil(bounds.height())));
+                // The ink of the text is compared, not the line height of the font
+                const QRectF inkBounds = metrics.tightBoundingRect(trimmedText);
+                match.pixelSize = renderPixelSize * double(scanInkHeight) / qMax(1.0, inkBounds.height());
                 matches.push_back(match);
             }
         }

@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/pdfplugins/scantextplugin">
+        <file>edit-scanned-text.svg</file>
+    </qresource>
+</RCC>

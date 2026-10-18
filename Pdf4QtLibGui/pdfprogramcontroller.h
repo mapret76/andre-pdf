@@ -513,6 +513,7 @@ private:
     pdf::PDFProgress* m_progress;
 
     QStringList m_enabledPlugins;
+    QStringList m_knownPlugins;     ///< Plugins found before; a plugin new to the user is enabled
     bool m_loadAllPlugins;
     pdf::PDFPluginInfos m_plugins;
     std::vector<std::pair<pdf::PDFPluginInfo, pdf::PDFPlugin*>> m_loadedPlugins;

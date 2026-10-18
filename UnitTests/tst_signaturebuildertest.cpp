@@ -38,6 +38,7 @@
 #include "pdftextredline.h"
 #include "pdffontidentifier.h"
 #include "pdffontinstaller.h"
+#include "pdfscantexteditor.h"
 #include "pdfrenderer.h"
 #include "pdfcms.h"
 #include "pdffont.h"
@@ -129,6 +130,7 @@ private slots:
     void fontNames();
     void fontMatching();
     void fontInstaller();
+    void scanTextEdit();
 
 private:
     static bool createTestCertificate(const QTemporaryDir& directory, PDFCertificateEntry& certificate, QString& password);
@@ -1632,6 +1634,81 @@ void SignatureBuilderTest::fontInstaller()
     QVERIFY(PDFFontInstaller::getCandidateFamilies().contains(QStringLiteral("Tinos")));
     PDFFontInstaller::setTestConfiguration(QStringLiteral("https://api.fontsource.org/v1"), QString());
     QStandardPaths::setTestModeEnabled(false);
+}
+
+void SignatureBuilderTest::scanTextEdit()
+{
+    const QStringList families = { QStringLiteral("DejaVu Sans"), QStringLiteral("DejaVu Serif"), QStringLiteral("DejaVu Sans Mono"), QStringLiteral("Nimbus Sans"), QStringLiteral("Nimbus Roman") };
+    for (const QString& family : families)
+    {
+        if (!PDFFontIdentifier::isInstalled(family))
+        {
+            QSKIP(qPrintable(QString("The font %1 is not installed").arg(family)));
+        }
+    }
+
+    // A page with a line of a contract in a serif font (Qt coordinates: baseline 200 from the top)
+    PDFDocumentBuilder builder;
+    const PDFObjectReference page = builder.appendPage(QRectF(0, 0, 595, 842));
+    {
+        PDFPageContentStreamBuilder content(&builder, PDFContentStreamBuilder::CoordinateSystem::Qt, PDFPageContentStreamBuilder::Mode::Replace);
+        QPainter* painter = content.begin(page);
+        QFont font("DejaVu Serif");
+        font.setPointSizeF(14);
+        painter->setFont(font);
+        painter->drawText(QPointF(60, 200), QStringLiteral("Purchase price R 950 000"));
+        painter->drawText(QPointF(60, 260), QStringLiteral("Other line stays"));
+        content.end(painter);
+    }
+    const PDFDocument document = builder.build();
+
+    const QRectF area(55, 842 - 212, 260, 30);
+    QCOMPARE(PDFScanTextEditor::getText(&document, 0, area), QStringLiteral("Purchase price R 950 000"));
+
+    const QImage image = PDFScanTextEditor::renderArea(&document, 0, area, 300);
+    QCOMPARE(image.width(), qCeil(260 * 300 / 72.0));
+    const std::vector<PDFFontIdentifier::Match> matches = PDFFontIdentifier::matchScan(image, QStringLiteral("Purchase price R 950 000"), families, 3);
+    QVERIFY(!matches.empty());
+    QCOMPARE(matches.front().family, QStringLiteral("DejaVu Serif"));
+
+    // The size of the identified font on the page is about the original 14 points
+    const double pointSize = matches.front().pixelSize * 72.0 / 300.0;
+    QVERIFY2(qAbs(pointSize - 14.0) < 2.0, qPrintable(QString::number(pointSize)));
+
+    const QRectF ink = PDFScanTextEditor::getInkRectangle(image, area);
+    QVERIFY(area.contains(ink) && ink.width() > 150 && ink.height() > 8 && ink.height() < 20);
+
+    QColor paper;
+    QColor inkColor;
+    PDFFontIdentifier::getScanColors(image, paper, inkColor);
+
+    PDFScanTextEditor::Edit edit;
+    edit.pageIndex = 0;
+    edit.area = area;
+    edit.inkRectangle = ink;
+    edit.text = QStringLiteral("Purchase price R 875 000");
+    edit.font = QFont(matches.front().family);
+    edit.font.setPointSizeF(pointSize);
+    edit.ink = inkColor;
+    edit.paper = paper;
+    const PDFDocumentPointer edited = PDFScanTextEditor::apply(&document, edit);
+    QVERIFY(edited);
+
+    // The new text is on the page, where the old one was, in the same font and size
+    const QImage after = PDFScanTextEditor::renderArea(edited.data(), 0, area, 300);
+    const std::vector<PDFFontIdentifier::Match> afterMatches = PDFFontIdentifier::matchScan(after, edit.text, families, 1);
+    QVERIFY(!afterMatches.empty());
+    QCOMPARE(afterMatches.front().family, QStringLiteral("DejaVu Serif"));
+    const QRectF afterInk = PDFScanTextEditor::getInkRectangle(after, area);
+    QVERIFY2(qAbs(afterInk.left() - ink.left()) < 2.0 && qAbs(afterInk.center().y() - ink.center().y()) < 2.0 && qAbs(afterInk.height() - ink.height()) < 2.0,
+             qPrintable(QString("%1 %2 %3 / %4 %5 %6").arg(ink.left()).arg(ink.center().y()).arg(ink.height()).arg(afterInk.left()).arg(afterInk.center().y()).arg(afterInk.height())));
+    // Born-digital text under the edit stays in the content (only covered) - the
+    // editor reports it; the own OCR layer of a scan is removed (none here)
+    QVERIFY(!PDFScanTextEditor::hasOwnOcrLayer(&document, 0));
+    bool isOcrLayerRemoved = true;
+    QVERIFY(PDFScanTextEditor::apply(&document, edit, &isOcrLayerRemoved));
+    QVERIFY(!isOcrLayerRemoved);
+    QCOMPARE(PDFScanTextEditor::getText(edited.data(), 0, QRectF(55, 842 - 272, 260, 30)), QStringLiteral("Other line stays"));
 }
 
 QTEST_MAIN(SignatureBuilderTest)

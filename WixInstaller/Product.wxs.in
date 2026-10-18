@@ -354,6 +354,9 @@ ${PDF4QT_WIX_OCR_COMPONENTS}<?endif?>
       <Component Id="cmpEditorPlugin" Directory="dir_pdfplugins" Guid="{FE5DC1D1-3320-43A7-BD4F-DCFB2A9DE039}">
         <File Id="filEditorPlugin" KeyPath="yes" Source="$(var.MyInstallDir)\pdfplugins\EditorPlugin.dll" />
       </Component>
+      <Component Id="cmpScanTextPlugin" Directory="dir_pdfplugins" Guid="{7E07DEFB-8E65-408E-B7E3-A0AC6D5B2FFF}">
+        <File Id="filScanTextPlugin" KeyPath="yes" Source="$(var.MyInstallDir)\pdfplugins\ScanTextPlugin.dll" />
+      </Component>
     </ComponentGroup>
   </Fragment>
 

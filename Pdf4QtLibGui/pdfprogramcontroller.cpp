@@ -2222,6 +2222,8 @@ void PDFProgramController::readSettings(Settings settingsFlags)
         settings.beginGroup("Plugins");
         m_loadAllPlugins = !settings.contains("EnabledPlugins");
         m_enabledPlugins = settings.value("EnabledPlugins").toStringList();
+        // Settings written before the list of the known plugins existed know the enabled ones
+        m_knownPlugins = settings.value("KnownPlugins", m_enabledPlugins).toStringList();
         settings.endGroup();
     }
 
@@ -2918,15 +2920,19 @@ void PDFProgramController::loadPlugins()
             m_plugins.back().pluginFileWithPath = pluginFileName;
 
             QString pluginName = m_plugins.back().name;
-            if (!m_enabledPlugins.contains(pluginName) && !m_loadAllPlugins)
+            const bool isNewPlugin = !m_knownPlugins.contains(pluginName);
+            if (!m_enabledPlugins.contains(pluginName) && !m_loadAllPlugins && !isNewPlugin)
             {
+                // The user has disabled the plugin
                 loader.unload();
                 continue;
             }
 
-            if (m_loadAllPlugins)
+            if (m_loadAllPlugins || isNewPlugin)
             {
+                // A plugin added by an update is enabled, as on a fresh installation
                 m_enabledPlugins << pluginName;
+                m_knownPlugins << pluginName;
             }
 
             pdf::PDFPlugin* plugin = qobject_cast<pdf::PDFPlugin*>(loader.instance());
@@ -3037,6 +3043,7 @@ void PDFProgramController::writeSettings()
     // Save allowed plugins
     settings.beginGroup("Plugins");
     settings.setValue("EnabledPlugins", m_enabledPlugins);
+    settings.setValue("KnownPlugins", m_knownPlugins);
     settings.endGroup();
 
     // Save trusted certificates

@@ -1,0 +1,7 @@
+{
+    "Name" : "ScanText",
+    "Author" : "Andre Pretorius",
+    "Version" : "1.0.0",
+    "License" : "MIT",
+    "Description" : "Edit the text of a scanned page in its original font: identify the font, find and install free fonts."
+}

@@ -43,7 +43,7 @@ Queue:
 - [x] A10 Phase 4.2: export to Word (open in M365 Word) and Excel (tables -> .xlsx)
 - [x] A11 Phase 4.3: Share: Windows Share sheet (email/WhatsApp), mail with attachment
 - [x] A12 Phase 4.4: highlight/comment polish; contract redline report in DocDiff
-- [ ] A13 Phase 6: font identification, installed check, find/download/install, embed
+- [x] A13 Phase 6: font identification, installed check, find/download/install, embed
 - [ ] A14 Phase 5: Android - Pdf4QtLibCore on arm64 in CI, then Qt Quick viewer + sign with .pfx, APK from CI
 - [ ] A15 Phase 7: scan-font engine
 - [ ] A16 Release: MSI + APK from CI, ledger and skill final, user guide in docs/andre/
@@ -59,6 +59,8 @@ Waiting on Andre:
 - Phase 2 gate: certify a PDF with his own certificate, check it in Acrobat Reader.
 - Phase 3 gate: a real contract pack: Signature Library (import his four signatures),
   Split && Sign Contract Pack, open each file in Acrobat Reader.
+- Phase 6 gate: 20 of his scans: OCR, then Scan Text -> Edit Scanned Text on a word of
+  each; the right family named for at least 16, edits unnoticed at 100% zoom.
 
 ## Requirements (as Andre stated them, 2026-10-17/18)
 
@@ -413,3 +415,31 @@ upstream author's machine, not ours).
   `textRedline` (changes, empty case, the report's own text read back, pagination).
 - Compare app: "Create Redline Report..." (left = old version, right = new version),
   saves and opens the report. **Phase 4 is complete in code.**
+
+### 2026-10-18 (night) - autopilot: A13 font-faithful editing of scans (Phase 6)
+- `PDFFontIdentifier` (core): PDF font names to installed families (subset prefix, PostScript
+  names, glued style words, squeezed names matched against the installed families);
+  installed check (foundry suffixes "[urw]" and generic aliases such as "Serif" left out);
+  metric-compatible free substitutes; `matchScan` renders the text in each candidate (4
+  styles) and compares ink masks at 40 px height (tolerance of one pixel, ink amount, width
+  of the whole text), and gives the pixel size from the ink height; `getScanColors`.
+- `PDFFontInstaller` (core): Fontsource API (`api.fontsource.org/v1`, no key), free
+  licences only (OFL, Apache, UFL, MIT, CC0, GPL with the font exception), Latin subset
+  TTFs; `loadForTrial` (cache, this session only) and `install` per user: Windows
+  `%LOCALAPPDATA%\Microsoft\Windows\Fonts` + HKCU Fonts registry + AddFontResource +
+  WM_FONTCHANGE, elsewhere ~/.local/share/fonts. A commercial font is never downloaded; its
+  free substitutes are named instead.
+- `PDFScanTextEditor` (core): render an area, its text (OCR layer), ink rectangle; the edit
+  covers the area in the paper colour and writes the new text centred on the old ink,
+  in the matched font and size and the ink colour (embedded by the PDF writer). The own
+  OCR layer of the page is removed, because it would still hold the old words; the user
+  is told to run OCR on the page again. On born-digital text the old text stays under
+  the cover and the user is pointed to Edit Page Content.
+- New plugin **Scan Text** -> "Edit Scanned Text..." (rectangle tool, dialog: the scan, its
+  text, the ranked fonts with their status, fonts named by the PDF first when missing,
+  "Search Free Fonts Online..." tries 26 common free document fonts, "Install Font...",
+  preview, Replace Text). Installer component added. Plugins added by an update are now
+  enabled for existing users ("KnownPlugins" setting).
+- Tests: `fontNames`, `fontMatching` (identified among all installed fonts), `fontInstaller`
+  (loopback catalogue, licence refusal, install, trial cache), `scanTextEdit` (end to end:
+  font, size within 2 pt, position within 2 pt), `scanTextDialog`.

@@ -63,6 +63,8 @@ add_library(Pdf4QtLibCore SHARED
     sources/pdftextredline.h
     sources/pdffontinstaller.cpp
     sources/pdffontinstaller.h
+    sources/pdfscantexteditor.cpp
+    sources/pdfscantexteditor.h
     sources/pdffontidentifier.cpp
     sources/pdffontidentifier.h
     sources/pdfsignaturelibrary.cpp

@@ -36,6 +36,7 @@
 #include "initialsdialog.h"
 #include "contractsigningdialog.h"
 #include "packsigningdialog.h"
+#include "scantextdialog.h"
 
 #include <QtTest>
 #include <QLineEdit>
@@ -63,6 +64,7 @@ private slots:
     void initialsDialog();
     void contractSigningChecklist();
     void packSigningDialog();
+    void scanTextDialog();
     void rendering_data();
     void rendering();
     void fallback_data();
@@ -564,6 +566,55 @@ void SignatureAppearanceTest::packSigningDialog()
     QTimer::singleShot(0, []() { if (QWidget* box = QApplication::activeModalWidget()) { box->close(); } });
     missingFolder.accept();
     QVERIFY(missingFolder.result() != int(QDialog::Accepted));
+}
+
+void SignatureAppearanceTest::scanTextDialog()
+{
+    if (!pdf::PDFFontIdentifier::isInstalled(QStringLiteral("DejaVu Serif")))
+    {
+        QSKIP("The font DejaVu Serif is not installed");
+    }
+
+    PDFDocumentBuilder builder;
+    const PDFObjectReference page = builder.appendPage(QRectF(0, 0, 595, 842));
+    {
+        PDFPageContentStreamBuilder content(&builder, PDFContentStreamBuilder::CoordinateSystem::Qt, PDFPageContentStreamBuilder::Mode::Replace);
+        QPainter* painter = content.begin(page);
+        QFont font("DejaVu Serif");
+        font.setPointSizeF(14);
+        painter->setFont(font);
+        painter->drawText(QPointF(60, 200), QStringLiteral("Purchase price R 950 000"));
+        content.end(painter);
+    }
+    const PDFDocument document = builder.build();
+
+    // The font of the page is read from its resources
+    const std::vector<pdf::PDFFontIdentifier::FontName> fonts = pdfplugin::ScanTextDialog::getPageFonts(&document, 0);
+    QVERIFY(!fonts.empty());
+    QStringList fontNames;
+    for (const auto& font : fonts)
+    {
+        fontNames << font.family;
+    }
+    QVERIFY2(fontNames.contains(QStringLiteral("DejaVu Serif")), qPrintable(fontNames.join(", ")));
+
+    // Opened on the area, the text is read and the font identified at once
+    pdfplugin::ScanTextDialog dialog(nullptr, &document, 0, QRectF(55, 842 - 212, 260, 30));
+    auto* table = dialog.findChild<QTableWidget*>();
+    QVERIFY(table && table->rowCount() > 0);
+    const QList<QTableWidgetItem*> selected = table->selectedItems();
+    QVERIFY(!selected.isEmpty());
+    QCOMPARE(table->item(selected.front()->row(), 0)->text(), QStringLiteral("DejaVu Serif"));
+
+    const QList<QLineEdit*> edits = dialog.findChildren<QLineEdit*>();
+    QCOMPARE(edits.size(), 2);
+    QCOMPARE(edits[0]->text(), QStringLiteral("Purchase price R 950 000"));
+    edits[1]->setText(QStringLiteral("Purchase price R 875 000"));
+    dialog.accept();
+    QCOMPARE(dialog.result(), int(QDialog::Accepted));
+    QCOMPARE(dialog.getEdit().font.family(), QStringLiteral("DejaVu Serif"));
+    QVERIFY(qAbs(dialog.getEdit().font.pointSizeF() - 14.0) < 2.0);
+    QCOMPARE(dialog.getEdit().text, QStringLiteral("Purchase price R 875 000"));
 }
 
 QTEST_MAIN(SignatureAppearanceTest)
