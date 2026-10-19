@@ -112,7 +112,7 @@ public:
     /// Largest accepted OCSP response, CA certificate and CRL
     static constexpr qint64 MAXIMAL_OCSP_SIZE = 1024 * 1024;
     static constexpr qint64 MAXIMAL_CERTIFICATE_SIZE = 1024 * 1024;
-    static constexpr qint64 MAXIMAL_CRL_SIZE = 32 * 1024 * 1024;
+    static constexpr qint64 MAXIMAL_CRL_SIZE = 10 * 1024 * 1024;
 };
 
 }   // namespace pdf

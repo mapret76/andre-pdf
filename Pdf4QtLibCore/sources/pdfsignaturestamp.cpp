@@ -56,14 +56,20 @@ PDFSignatureStamp::Data PDFSignatureStamp::create(const PDFCertificateInfo& cert
     Data data;
     // Control characters (a new line in a forged name) would add lines to the payload
     data.signer = certificate.getName(PDFCertificateInfo::CommonName);
-    data.signer.removeIf([](QChar c) { return c.category() == QChar::Other_Control || c.category() == QChar::Other_Format; });
+    data.signer.removeIf([](QChar c) { return c.category() == QChar::Other_Control || c.category() == QChar::Other_Format ||
+                                              c.category() == QChar::Separator_Line || c.category() == QChar::Separator_Paragraph; });
     data.signingTime = signingTime;
     data.certification = certification;
     data.certificateSha256 = QCryptographicHash::hash(certificate.getCertificateData(), QCryptographicHash::Sha256);
 
     // Issuer and serial number name the certificate, so a third party can ask the issuer
     // about it (or find it in its directory)
-    auto clean = [](QString text) { text.removeIf([](QChar c) { return c.category() == QChar::Other_Control || c.category() == QChar::Other_Format; }); return text; };
+    auto clean = [](QString text)
+    {
+        text.removeIf([](QChar c) { return c.category() == QChar::Other_Control || c.category() == QChar::Other_Format ||
+                                           c.category() == QChar::Separator_Line || c.category() == QChar::Separator_Paragraph; });
+        return text;
+    };
     const PDFSignatureReport::Certificate description = PDFSignatureReport::describeCertificate(certificate.getCertificateData());
     data.issuer = clean(description.issuer);
     data.serialNumber = clean(description.serialNumber);
@@ -150,7 +156,20 @@ QStringList PDFSignatureStamp::getTextLines(const Data& data)
     lines << tr("Certificate %1").arg(formatFingerprint(data.certificateSha256, 8));
     if (!data.issuerName.isEmpty())
     {
-        lines << tr("Issued by %1, serial %2").arg(data.issuerName.left(40), data.serialNumber.left(24));
+        // The issuer is shortened visibly; the serial is never cut, it goes on as many lines
+        // as it needs (the QR code holds both in full)
+        const QString issuer = data.issuerName.size() > 34 ? data.issuerName.left(33) + QChar(0x2026) : data.issuerName;
+        lines << tr("Issued by %1").arg(issuer);
+        QStringList groups;
+        for (qsizetype i = 0; i < data.serialNumber.size(); i += 4)
+        {
+            groups << data.serialNumber.mid(i, 4);
+        }
+        for (qsizetype i = 0; i < groups.size(); i += 6)
+        {
+            const QString part = groups.mid(i, 6).join(' ');
+            lines << (i == 0 ? tr("Serial %1").arg(part) : QStringLiteral("       ") + part);
+        }
     }
     if (!data.documentSha256.isEmpty())
     {

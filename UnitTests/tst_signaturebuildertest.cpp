@@ -797,6 +797,13 @@ void SignatureBuilderTest::verificationStamp()
     QVERIFY(!realData.issuer.isEmpty() && realPayload.contains(QStringLiteral("Issuer: ") + realData.issuer));
     QVERIFY(realData.issuerName.contains(QStringLiteral("PDF4QT")) || !realData.issuerName.contains(QStringLiteral("CN=")));
     QVERIFY(PDFSignatureStamp::getTextLines(realData).join('\n').contains(QStringLiteral("Issued by ")));
+    // R2-A M3: the serial is shown in full (grouped, over lines), a long issuer is elided visibly
+    PDFSignatureStamp::Data longData = realData;
+    longData.serialNumber = QStringLiteral("0123456789ABCDEF0123456789ABCDEF01234567");
+    longData.issuerName = QStringLiteral("LAWtrust Advanced Electronic Signature CA 2026");
+    const QString longText = PDFSignatureStamp::getTextLines(longData).join(QChar(' ')).simplified().remove(QChar(' '));
+    QVERIFY2(longText.contains(longData.serialNumber), qPrintable(longText));
+    QVERIFY(PDFSignatureStamp::getTextLines(longData).join('\n').contains(QChar(0x2026)));
     QVERIFY(PDFSignatureStamp::getTextLines(data).join('\n').indexOf(QStringLiteral("Issued by ")) == -1);   // unreadable certificate: no line
     QVERIFY(PDFSignatureStamp::getTextLines(data).join('\n').contains(PDFSignatureStamp::formatFingerprint(data.documentSha256, 8)));
     QCOMPARE(PDFSignatureStamp::formatFingerprint(QByteArray::fromHex("0123456789abcdef")), QStringLiteral("0123 4567 89AB CDEF"));

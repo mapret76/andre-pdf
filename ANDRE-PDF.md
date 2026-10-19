@@ -53,12 +53,13 @@ a third party to confirm the ID of the certificate and author"; "version control
 new versions, download and install when the user agrees ... summary of what changes ... full
 version history"; "an independent reviewer after every task ... functionality and security"):
 - [x] R0 Independent review of A1-A16 (two reviewers, fresh context), findings fixed; fixes verified (R0-verification.md), its findings fixed (R1-fixes.md)
-- [~] B1 PAdES signatures: ETSI.CAdES.detached with signing-certificate-v2, timestamp by default, LTV (DSS: chain, OCSP/CRL), document timestamp (built, review R2 pending)
-- [~] B2 "Verify Signatures" report for third parties: signer identity (subject, issuer, serial, fingerprints), chain, revocation, integrity, lock, AES (accredited) or ordinary electronic signature (built, review R2 pending)
-- [~] B3 Stamp and QR carry issuer and serial of the certificate (built, review R2 pending)
+- [x] B1 PAdES signatures: ETSI.CAdES.detached with signing-certificate-v2, timestamp by default, LTV (DSS: chain, OCSP/CRL), document timestamp (reviewed R2-A, fixed; Windows-store path and Acrobat check are a gate below)
+- [x] B2 "Verify Signatures" report for third parties: signer identity (subject, issuer, serial, fingerprints), chain, revocation, integrity, lock, AES (accredited) or ordinary electronic signature (reviewed R2-B, fixed)
+- [x] B3 Stamp and QR carry issuer and serial of the certificate (reviewed R2-A, fixed)
 - [x] B4 Versions: Andre PDF version number, CHANGELOG.md, Help -> Version History, "What's new" after an update (reviewed: B45-review.md, fixed: R1-fixes.md)
 - [x] B5 Updates: check (start-up + Help), summary of every newer version, download, verify the signed manifest (ECDSA P-256, key in a vault file per Andre) and SHA-256, install on consent; release script (reviewed: B45-review.md, fixed: R1-fixes.md)
-- [ ] R2 Independent review of B1-B3 and of the R1 fixes, findings fixed
+- [x] R2 Independent review of B1-B3 and of the R1 fixes, findings fixed (R2-A.md, R2-B.md, R2-fixes.md)
+- [ ] R3 Independent verification of the R2 fixes
 - [ ] B6 First release v1.0.0: Windows_MSI on master, then `tools/andre-release.sh <run>` on andre-vault (Andre types "yes")
 Every task of queue B gets an independent review before it is ticked (`docs/andre/reviews/`).
 
@@ -71,6 +72,10 @@ Waiting on Andre:
   github.com/login/device. Until then the MSI keeps the file name `JakubMelka.PDF4QT_<version>.msi`.
 - Phase 1 gate: install the MSI and open his PDFs.
 - Phase 2 gate: certify a PDF with his own certificate, check it in Acrobat Reader.
+- B1 gate (R2-A M5): sign with a certificate from the **Windows certificate store** (ideally the
+  accredited token), "No changes" lock, timestamp and long-term validation on; open the file in
+  Acrobat Reader (signature panel: certified, valid, "LTV enabled") and, if possible, in the EU
+  DSS demo validator; then run Signature Verification Report on it.
 - Phase 3 gate: a real contract pack: Signature Library (import his four signatures),
   Split && Sign Contract Pack, open each file in Acrobat Reader.
 - Phase 6 gate: 20 of his scans: OCR, then Scan Text -> Edit Scanned Text on a word of
@@ -121,7 +126,7 @@ behind it in [docs/andre/options-report.md](docs/andre/options-report.md).
 | 2026-10-18 | *(autopilot)* Scan-font engine written from scratch in C++ (connected components, averaging, pixel-edge tracing, Douglas-Peucker, a TrueType writer with straight outlines) instead of jbig2enc + autotrace + fontTools | autotrace (and Potrace) are GPL and must not be shipped, fontTools is Python. The OpenType format is public. Straight segments at 1000 units per em are smooth enough at text sizes. |
 | 2026-10-19 | Release-signing key in an owner-only file on andre-vault | Andre's choice (asked 2026-10-19), knowingly departing from the rule that secrets live on VM2 or the broker. The app ships only the public key and refuses any update not signed by it. |
 | 2026-10-19 | Every task reviewed by an independent agent (fresh context, own git worktree and build) for functionality and security; findings fixed before ticking; A1-A16 reviewed retroactively | Andre's requirement. The reviewer never commits; its report is kept in `docs/andre/reviews/`. |
-| 2026-10-19 | South African law: Andre PDF produces standard PAdES signatures and a third-party verification report; whether a signature is an *advanced* electronic signature depends on the certificate (an SAAA-accredited provider, ECT Act s13(1), s37-38), which the report states | Software cannot make a signature advanced. ECT Act s4(3) and Schedule 2 exclude some documents (for example the alienation of immovable property, long leases of land, wills, bills of exchange); the user guide says so. |
+| 2026-10-19 | South African law: Andre PDF produces standard PAdES signatures and a third-party verification report; whether a signature is an *advanced* electronic signature depends on the certificate (an SAAA-accredited provider, ECT Act s13(1), s37-38), which the report states | Software cannot make a signature advanced. ECT Act s4(4) and Schedule 2 exclude some documents (for example the alienation of immovable property, long leases of land, wills, bills of exchange); the user guide says so. |
 | 2026-10-18 | *(autopilot)* Rebrand only the names users see: Andre PDF Editor / Viewer / Pages / Compare, launcher "Andre PDF", installer "Andre PDF" by Andre Pretorius with a new upgrade code; internal application and organisation names stay `PDF4QT ...` / `MelkaJ` | Settings and the OCR model folders are keyed on the internal names. The new upgrade code installs alongside an upstream PDF4QT install instead of replacing it. |
 
 ## Roadmap
@@ -556,3 +561,15 @@ upstream author's machine, not ours).
   Signature Verification Report... (save as PDF or HTML). User guide: how a third party
   confirms the signer in Acrobat Reader; ECT Act s13, s37-38, s4(4) Schedule 2.
 - B3: stamp text and QR carry the issuer and the serial number of the certificate.
+
+### 2026-10-19 - R2 review of B1-B3 fixed
+- Two independent reviewers (R2-A signing / long-term validation / stamp, R2-B report and
+  every R1 fix) found no high issue and 9 medium ones; all fixed or recorded with tests, see
+  `docs/andre/reviews/R2-fixes.md`. Notable: the report now binds the signer's identity to
+  the signed signing-certificate attribute (a decoy certificate is no longer shown as the
+  signer) and refuses byte ranges with holes; stale OCSP/CRL data is not stored; only the
+  newest signature's certificates drive network requests (one minute, 32 certificates);
+  the stamp prints the full serial; the save dialog states the PAdES level the report finds;
+  signing offers to go on without a timestamp when the authority cannot be reached.
+- Open gate (R2-A M5): the Windows certificate store / token path and an Acrobat / EU DSS
+  check of a B-LTA file, under "Waiting on Andre".

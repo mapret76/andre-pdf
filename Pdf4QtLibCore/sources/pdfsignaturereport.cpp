@@ -33,12 +33,16 @@
 #include <QCryptographicHash>
 #include <QFileInfo>
 
+#include <cctype>
+
 #include <openssl/bio.h>
 #include <openssl/bn.h>
 #include <openssl/cms.h>
 #include <openssl/ocsp.h>
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
+#include <openssl/ess.h>
+#include <openssl/err.h>
 
 #include "pdfdbgheap.h"
 
@@ -106,7 +110,52 @@ public:
         return d2i_CMS_ContentInfo(nullptr, &pointer, data.size());
     }
 
-    /// Adds the certificates of the CMS object; returns its first signer's certificate (not owned)
+    /// Returns the value of a signed attribute of the type SEQUENCE, decoded by \p decode
+    template<typename T>
+    static T* getSignedAttribute(CMS_SignerInfo* signerInfo, int nid, T* (*decode)(T**, const unsigned char**, long))
+    {
+        const int index = CMS_signed_get_attr_by_NID(signerInfo, nid, -1);
+        X509_ATTRIBUTE* attribute = index >= 0 ? CMS_signed_get_attr(signerInfo, index) : nullptr;
+        ASN1_TYPE* value = attribute ? X509_ATTRIBUTE_get0_type(attribute, 0) : nullptr;
+        if (!value || value->type != V_ASN1_SEQUENCE)
+        {
+            return nullptr;
+        }
+        const unsigned char* pointer = value->value.sequence->data;
+        return decode(nullptr, &pointer, value->value.sequence->length);
+    }
+
+    /// The certificate is the one the signer signed with: it is named by the signed
+    /// signing-certificate(-v2) attribute (its hash), and its key verifies the signed
+    /// attributes. Issuer and serial alone can be copied into a decoy certificate.
+    static bool isSignerCertificate(CMS_SignerInfo* signerInfo, X509* certificate)
+    {
+        if (CMS_SignerInfo_cert_cmp(signerInfo, certificate) != 0)
+        {
+            return false;
+        }
+
+        ESS_SIGNING_CERT* signingCertificate = getSignedAttribute<ESS_SIGNING_CERT>(signerInfo, NID_id_smime_aa_signingCertificate, &d2i_ESS_SIGNING_CERT);
+        ESS_SIGNING_CERT_V2* signingCertificateV2 = getSignedAttribute<ESS_SIGNING_CERT_V2>(signerInfo, NID_id_smime_aa_signingCertificateV2, &d2i_ESS_SIGNING_CERT_V2);
+        STACK_OF(X509)* chain = sk_X509_new_null();
+        sk_X509_push(chain, certificate);
+        bool isSigner = OSSL_ESS_check_signing_certs(signingCertificate, signingCertificateV2, chain, 0) > 0;
+        sk_X509_free(chain);
+        ESS_SIGNING_CERT_free(signingCertificate);
+        ESS_SIGNING_CERT_V2_free(signingCertificateV2);
+
+        if (isSigner && CMS_signed_get_attr_count(signerInfo) > 0)
+        {
+            CMS_SignerInfo_set1_signer_cert(signerInfo, certificate);
+            isSigner = CMS_SignerInfo_verify(signerInfo) == 1;
+            CMS_SignerInfo_set1_signer_cert(signerInfo, nullptr);
+        }
+        ERR_clear_error();
+        return isSigner;
+    }
+
+    /// Adds the certificates of the CMS object; returns the certificate of its first
+    /// signer (not owned), nullptr when no certificate is the signer's
     static X509* addCertificates(CMS_ContentInfo* cms, Pool& pool)
     {
         X509* signer = nullptr;
@@ -117,7 +166,7 @@ public:
         {
             X509* certificate = sk_X509_value(certificates, i);
             pool.add(certificate);
-            if (!signer && signerInfo && CMS_SignerInfo_cert_cmp(signerInfo, certificate) == 0)
+            if (!signer && signerInfo && isSignerCertificate(signerInfo, certificate))
             {
                 for (X509* pooled : pool.certificates)
                 {
@@ -130,6 +179,38 @@ public:
         }
         sk_X509_pop_free(certificates, X509_free);
         return signer;
+    }
+
+    /// The two signed byte ranges must leave out exactly the hexadecimal string of the
+    /// signature (/Contents <...>), nothing else
+    static bool isGapOnlySignature(const QByteArray& data, const PDFSignature::ByteRanges& ranges)
+    {
+        if (ranges.size() != 2 || ranges[0].offset != 0 || ranges[0].size < 0 || ranges[1].size < 0)
+        {
+            return false;
+        }
+        const qint64 gapStart = ranges[0].offset + ranges[0].size;
+        const qint64 gapEnd = ranges[1].offset;     // first byte after the gap
+        if (gapEnd <= gapStart + 1 || gapEnd + ranges[1].size > data.size() || data[gapStart] != '<' || data[gapEnd - 1] != '>')
+        {
+            return false;
+        }
+        for (qint64 i = gapStart + 1; i < gapEnd - 1; ++i)
+        {
+            if (!isxdigit(static_cast<unsigned char>(data[i])))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// Removes characters which could change how a name is read (controls, bidi marks)
+    static QString clean(QString text)
+    {
+        text.removeIf([](QChar c) { return c.category() == QChar::Other_Control || c.category() == QChar::Other_Format ||
+                                           c.category() == QChar::Separator_Line || c.category() == QChar::Separator_Paragraph; });
+        return text;
     }
 
     static QByteArray getTimestampToken(CMS_ContentInfo* cms)
@@ -197,14 +278,14 @@ public:
     {
         PDFSignatureReport::Certificate result;
         X509_NAME* subject = X509_get_subject_name(certificate);
-        result.subject = printName(subject);
-        result.commonName = getEntry(subject, NID_commonName);
-        result.issuer = printName(X509_get_issuer_name(certificate));
+        result.subject = clean(printName(subject));
+        result.commonName = clean(getEntry(subject, NID_commonName));
+        result.issuer = clean(printName(X509_get_issuer_name(certificate)));
 
         STACK_OF(OPENSSL_STRING)* emails = X509_get1_email(certificate);
         if (sk_OPENSSL_STRING_num(emails) > 0)
         {
-            result.email = QString::fromUtf8(sk_OPENSSL_STRING_value(emails, 0));
+            result.email = clean(QString::fromUtf8(sk_OPENSSL_STRING_value(emails, 0)));
         }
         X509_email_free(emails);
 
@@ -218,7 +299,7 @@ public:
         result.sha1 = getFingerprint(certificate, EVP_sha1());
         result.notBefore = toDateTime(X509_get0_notBefore(certificate));
         result.notAfter = toDateTime(X509_get0_notAfter(certificate));
-        result.isSelfSigned = (X509_get_extension_flags(certificate) & EXFLAG_SS) != 0;
+        result.isSelfSigned = (X509_get_extension_flags(certificate) & EXFLAG_SS) != 0 && X509_verify(certificate, X509_get0_pubkey(certificate)) == 1;
         result.isQualified = X509_get_ext_by_NID(certificate, NID_qcStatements, -1) >= 0;
 
         CERTIFICATEPOLICIES* policies = static_cast<CERTIFICATEPOLICIES*>(X509_get_ext_d2i(certificate, NID_certificate_policies, nullptr, nullptr));
@@ -415,7 +496,8 @@ PDFSignatureReport::Report PDFSignatureReport::create(const QByteArray& data, co
         {
             item.signedBytesEnd = std::max<qint64>(item.signedBytesEnd, range.offset + range.size);
         }
-        item.isCoveringWholeFile = item.signedBytesEnd == data.size();
+        const bool isGapOnlySignature = PDFSignatureReportHelper::isGapOnlySignature(data, signature.getByteRanges());
+        item.isCoveringWholeFile = isGapOnlySignature && item.signedBytesEnd == data.size();
 
         for (const PDFSignatureVerificationResult& result : results)
         {
@@ -430,10 +512,24 @@ PDFSignatureReport::Report PDFSignatureReport::create(const QByteArray& data, co
             }
         }
 
+        // Bytes inside the signed span that the signature does not cover could be changed
+        if (!isGapOnlySignature)
+        {
+            item.isIntegrityValid = false;
+            item.errors << tr("The signed byte ranges leave out more than the signature itself.");
+        }
+        if (!signers[i] && messages[i])
+        {
+            item.isIntegrityValid = false;
+            item.errors << tr("No certificate in the signature is the one named by its signed attributes and verifying it.");
+        }
+
         // Chain of the signer, as far as the certificates reach
         X509* certificate = signers[i];
+        std::vector<X509*> chain;
         for (int depth = 0; certificate && depth < 10; ++depth)
         {
+            chain.push_back(certificate);
             item.chain.push_back(PDFSignatureReportHelper::describe(certificate));
             if (item.chain.back().isSelfSigned)
             {
@@ -445,6 +541,15 @@ PDFSignatureReport::Report PDFSignatureReport::create(const QByteArray& data, co
         if (signers[i])
         {
             item.revocation = PDFSignatureReportHelper::getRevocation(signers[i], pool.findIssuer(signers[i]), store, item.revocationSource, item.revocationTime);
+        }
+
+        // B-LT needs the status of every certificate of the chain below its root
+        bool isChainStatusComplete = !chain.empty() && item.chain.back().isSelfSigned;
+        for (size_t c = 0; isChainStatusComplete && c + 1 < chain.size(); ++c)
+        {
+            QString source;
+            QDateTime time;
+            isChainStatusComplete = PDFSignatureReportHelper::getRevocation(chain[c], chain[c + 1], store, source, time) == Revocation::Good;
         }
 
         const QByteArray token = messages[i] ? PDFSignatureReportHelper::getTimestampToken(messages[i]) : QByteArray();
@@ -466,10 +571,10 @@ PDFSignatureReport::Report PDFSignatureReport::create(const QByteArray& data, co
         if (!item.isDocumentTimestamp && item.subfilter == "ETSI.CAdES.detached" && messages[i] && PDFSignatureReportHelper::hasSigningCertificateV2(messages[i]))
         {
             item.padesLevel = QStringLiteral("B-B");
-            if (!token.isEmpty())
+            if (!token.isEmpty() && item.timestampTime.isValid())
             {
                 item.padesLevel = QStringLiteral("B-T");
-                if (item.revocation != Revocation::NotChecked)
+                if (isChainStatusComplete)
                 {
                     item.padesLevel = QStringLiteral("B-LT");
                 }
@@ -601,6 +706,11 @@ QString PDFSignatureReport::toHtml(const Report& report)
                 revocation = tr("no revocation data embedded in the file");
                 break;
         }
+        const QDateTime signingTime = signature.timestampTime.isValid() ? signature.timestampTime : signature.claimedTime;
+        if (signature.revocation != Revocation::NotChecked && signingTime.isValid() && signature.revocationTime.isValid() && signature.revocationTime < signingTime.addSecs(-300))
+        {
+            revocation += tr("; produced before the signature, so it does not prove the status at the time of signing");
+        }
         html += Helper::row(tr("Revocation status"), revocation);
         for (const QString& error : signature.errors)
         {
@@ -661,10 +771,17 @@ QString PDFSignatureReport::toHtml(const Report& report)
             {
                 html += Helper::escape(tr("The certificate is self-signed. This is an electronic signature (section 13(2) and (3)); it is NOT an advanced electronic signature."));
             }
+            else if (!signature.isCertificateTrusted || !signature.isIntegrityValid)
+            {
+                html += Helper::escape(tr("The certificate chain could not be verified on this computer, so the issuer named in the certificate is only a claim. "
+                                          "Treat this as an electronic signature (section 13(2) and (3)) until the chain is verified."));
+            }
             else
             {
-                html += Helper::escape(tr("This is an advanced electronic signature (section 13(1), presumed valid under section 13(4)) only if the certificate was issued under a process accredited by the South African Accreditation Authority (sections 37 and 38). "
-                                          "The issuer is \"%1\": compare it with the Authority's register of accredited authentication service providers. Otherwise it is an electronic signature (section 13(2) and (3)).").arg(signer.issuer));
+                html += Helper::escape(tr("The chain ends in a root trusted by this computer. This may be an advanced electronic signature (section 13(1), presumed valid under section 13(4)) "
+                                          "if the whole signing process is one accredited by the South African Accreditation Authority (sections 1, 37 and 38): "
+                                          "compare the issuer \"%1\" with the Authority's published list of accredited authentication service providers and ask the provider. "
+                                          "Otherwise it is an electronic signature (section 13(2) and (3)).").arg(signer.issuer));
             }
             html += "</p>\n";
         }

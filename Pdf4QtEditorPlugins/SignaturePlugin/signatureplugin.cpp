@@ -407,7 +407,7 @@ std::optional<QString> SignaturePlugin::getOpenPassword(const QByteArray& origin
     {
         bool ok = false;
         const QString password = QInputDialog::getText(m_dataExchangeInterface->getMainWindow(), tr("Encrypted Document"),
-                                                       attempt == 0 ? tr("Password of the document (needed to add the signature to it):") : tr("The password is wrong. Password of the document:"),
+                                                       attempt == 0 ? tr("Password of the document:") : tr("The password is wrong. Password of the document:"),
                                                        QLineEdit::Password, QString(), &ok);
         if (!ok)
         {
@@ -693,6 +693,32 @@ bool SignaturePlugin::onSignDigitally()
         }
         QApplication::restoreOverrideCursor();
 
+        // Offline, or the authority is down: the user may sign without the trusted time
+        bool isTimestampSkipped = false;
+        if (signingResult != pdf::PDFDocumentSigner::Result::OK && signatureType == SignDialog::SignatureWithTimestamp && !timestampErrorMessage.isEmpty() &&
+            QMessageBox::question(m_widget, tr("Timestamp"),
+                                  tr("The timestamp could not be obtained:\n%1\n\nSign without a timestamp? The time of signing is then only the one your computer claims, "
+                                     "and no long-term validation data is added.").arg(timestampErrorMessage),
+                                  QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes)
+        {
+            isTimestampSkipped = true;
+            timestampErrorMessage.clear();
+            parameters.signFunction = [certificate, &dialog](const QByteArray& dataToBeSigned, QByteArray& signature)
+            {
+                return pdf::PDFSignatureFactory::sign(*certificate, dialog.getPassword(), dataToBeSigned, signature);
+            };
+            QApplication::setOverrideCursor(Qt::WaitCursor);
+            try
+            {
+                signingResult = pdf::PDFDocumentSigner::sign(parameters, signedDocument);
+            }
+            catch (const std::exception& exception)
+            {
+                exceptionMessage = QString::fromLocal8Bit(exception.what());
+            }
+            QApplication::restoreOverrideCursor();
+        }
+
         if (signingResult != pdf::PDFDocumentSigner::Result::OK)
         {
             const QString errorMessage = !exceptionMessage.isEmpty() ? tr("The document could not be signed: %1").arg(exceptionMessage)
@@ -705,7 +731,7 @@ bool SignaturePlugin::onSignDigitally()
         const QString documentPassword = parameters.encryptionUserPassword.value_or(parameters.openPassword);
         const QByteArray signedBytes = signedDocument;
         std::optional<pdf::PDFLongTermValidation::Extension> extension;
-        if (dialog.isLongTermValidation())
+        if (dialog.isLongTermValidation() && !isTimestampSkipped)
         {
             extension = extendSignature(signedDocument, documentPassword, timestampSettings);
         }
@@ -788,6 +814,23 @@ void SignaturePlugin::checkSavedFile(const QString& fileName, const QString& sig
     if (extension)
     {
         lines << extension->getReport();
+    }
+    if (!isDocumentTimestamp)
+    {
+        // The level as a validator finds it in the saved file
+        try
+        {
+            for (const pdf::PDFSignatureReport::Signature& signature : pdf::PDFSignatureReport::create(data, fileName, password, true).signatures)
+            {
+                if (signature.fieldName == signatureName)
+                {
+                    lines << (signature.padesLevel.isEmpty() ? tr("- format: not PAdES") : tr("- format: PAdES baseline %1").arg(signature.padesLevel));
+                }
+            }
+        }
+        catch (const std::exception&)
+        {
+        }
     }
     const QString certificationText = pdf::PDFSignatureStamp::getCertificationText(check.certification);
     lines << (certificationText.isEmpty() ? tr("- the document is not locked (approval signature)") : tr("- %1").arg(certificationText));
@@ -994,8 +1037,17 @@ void SignaturePlugin::onVerificationReport()
     }
 
     QApplication::setOverrideCursor(Qt::WaitCursor);
-    const pdf::PDFSignatureReport::Report report = pdf::PDFSignatureReport::create(data, fileName, *password);
-    const QString html = pdf::PDFSignatureReport::toHtml(report);
+    QString html;
+    try
+    {
+        html = pdf::PDFSignatureReport::toHtml(pdf::PDFSignatureReport::create(data, fileName, *password));
+    }
+    catch (const std::exception& exception)
+    {
+        QApplication::restoreOverrideCursor();
+        QMessageBox::critical(m_widget, title, tr("The signatures could not be checked: %1").arg(QString::fromLocal8Bit(exception.what())));
+        return;
+    }
     QApplication::restoreOverrideCursor();
 
     QDialog dialog(m_dataExchangeInterface->getMainWindow());
@@ -1020,6 +1072,10 @@ void SignaturePlugin::onVerificationReport()
             writer.setPageSize(QPageSize(QPageSize::A4));
             writer.setTitle(title);
             browser->document()->print(&writer);
+            if (QFileInfo(target).size() == 0)
+            {
+                QMessageBox::critical(&dialog, title, tr("The report cannot be saved."));
+            }
         }
     });
     connect(saveHtml, &QPushButton::clicked, &dialog, [&]()

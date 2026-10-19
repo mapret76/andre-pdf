@@ -128,8 +128,38 @@ public:
 
     QByteArray getRoot() const { return toDer(m_root); }
 
+    /// CAdES signature of the data whose certificate set holds a decoy first: a copy of the
+    /// signer's certificate (same issuer, serial and key) with another name, signed by a
+    /// foreign key. With \p withSigner false the real certificate is left out.
+    QByteArray signWithDecoy(X509* certificate, const QByteArray& data, bool withSigner) const
+    {
+        X509* decoy = X509_dup(certificate);
+        X509_NAME* name = X509_NAME_new();
+        X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>("Decoy Person"), -1, -1, 0);
+        X509_set_subject_name(decoy, name);
+        X509_NAME_free(name);
+        X509_sign(decoy, m_foreignKey, EVP_sha256());
+
+        BIO* input = BIO_new_mem_buf(data.constData(), int(data.size()));
+        CMS_ContentInfo* cms = CMS_sign(certificate, m_userKey, nullptr, input, CMS_DETACHED | CMS_BINARY | CMS_NOSMIMECAP | CMS_NOCERTS | CMS_CADES);
+        BIO_free(input);
+        CMS_add1_cert(cms, decoy);
+        if (withSigner)
+        {
+            CMS_add1_cert(cms, certificate);
+        }
+        unsigned char* buffer = nullptr;
+        const int size = i2d_CMS_ContentInfo(cms, &buffer);
+        QByteArray result(reinterpret_cast<const char*>(buffer), size);
+        OPENSSL_free(buffer);
+        CMS_ContentInfo_free(cms);
+        X509_free(decoy);
+        return result;
+    }
+
     OcspBehaviour ocspBehaviour = OcspBehaviour::Answer;
     bool isCrlAvailable = true;
+    bool isStale = false;   ///< OCSP answers 30 days old without a next update, CRLs expired 30 days ago
     long revokedSerial = -1;
     int requestCount = 0;
 
@@ -190,8 +220,8 @@ private:
         X509_CRL* crl = X509_CRL_new();
         X509_CRL_set_version(crl, 1);
         X509_CRL_set_issuer_name(crl, X509_get_subject_name(m_root));
-        ASN1_TIME* now = X509_gmtime_adj(nullptr, 0);
-        ASN1_TIME* next = X509_gmtime_adj(nullptr, 7 * 24 * 3600);
+        ASN1_TIME* now = X509_gmtime_adj(nullptr, isStale ? -60 * 24 * 3600 : 0);
+        ASN1_TIME* next = X509_gmtime_adj(nullptr, isStale ? -30 * 24 * 3600 : 7 * 24 * 3600);
         X509_CRL_set1_lastUpdate(crl, now);
         X509_CRL_set1_nextUpdate(crl, next);
         if (revokedSerial > 0)
@@ -227,8 +257,8 @@ private:
         }
 
         OCSP_BASICRESP* basic = OCSP_BASICRESP_new();
-        ASN1_TIME* now = X509_gmtime_adj(nullptr, 0);
-        ASN1_TIME* next = X509_gmtime_adj(nullptr, 24 * 3600);
+        ASN1_TIME* now = X509_gmtime_adj(nullptr, isStale ? -30 * 24 * 3600 : 0);
+        ASN1_TIME* next = isStale ? nullptr : X509_gmtime_adj(nullptr, 24 * 3600);
         for (int i = 0; i < OCSP_request_onereq_count(request); ++i)
         {
             OCSP_CERTID* id = OCSP_onereq_get0_id(OCSP_request_onereq_get0(request, i));
@@ -354,11 +384,14 @@ private slots:
     void issuerIsFetched();
     void revokedCertificateIsReported();
     void foreignOcspAnswerIsRejected();
+    void staleRevocationDataIsRefused();
     void existingStoreIsKept();
     void encryptedDocument();
     void extensionWithoutTimestampAuthority();
     void verificationReport();
     void verificationReportOfChangedFile();
+    void verificationReportIgnoresDecoyCertificate();
+    void verificationReportGapInSignedRange();
 
 private:
     QByteArray sign(X509* certificate, bool withRoot, const std::optional<QString>& encryptionPassword = std::nullopt);
@@ -387,6 +420,7 @@ void LongTermValidationTest::init()
     m_authority.ocspBehaviour = TestCertificationAuthority::OcspBehaviour::Answer;
     m_authority.isCrlAvailable = true;
     m_authority.revokedSerial = -1;
+    m_authority.isStale = false;
 }
 
 QByteArray LongTermValidationTest::sign(X509* certificate, bool withRoot, const std::optional<QString>& encryptionPassword)
@@ -475,7 +509,7 @@ void LongTermValidationTest::validationDataFromOcsp()
     QVERIFY2(result.warnings.isEmpty(), qPrintable(result.warnings.join('\n')));
     QVERIFY(result.revokedCertificates.isEmpty());
     QCOMPARE(result.ocspCount, 1);
-    QCOMPARE(result.crlCount, 0);
+    QCOMPARE(result.crlCount, 1);   // the CRL as well, for verifiers checking CRLs only
     QCOMPARE(result.certificateCount, 2);
     QVERIFY(result.document.startsWith(signedDocument));
 
@@ -545,17 +579,29 @@ void LongTermValidationTest::foreignOcspAnswerIsRejected()
     QCOMPARE(result.warnings.size(), 1);
 }
 
+void LongTermValidationTest::staleRevocationDataIsRefused()
+{
+    // Review R2-A M1: an OCSP answer a month old (no next update) and an expired CRL
+    m_authority.isStale = true;
+    const PDFLongTermValidation::Result result = PDFLongTermValidation::addValidationData(sign(m_good, true), QString(), 5000);
+    QVERIFY(result.isOK());
+    QCOMPARE(result.ocspCount, 0);
+    QCOMPARE(result.crlCount, 0);
+    QCOMPARE(result.warnings.size(), 1);
+}
+
 void LongTermValidationTest::existingStoreIsKept()
 {
     const PDFLongTermValidation::Result first = PDFLongTermValidation::addValidationData(sign(m_good, true), QString(), 5000);
     QVERIFY(first.isOK());
 
-    // A CRL answer the second time: the certificates are there already, the CRL is new
+    // The second time (no OCSP): the certificates and the CRL are there already
     m_authority.ocspBehaviour = TestCertificationAuthority::OcspBehaviour::Unavailable;
     const PDFLongTermValidation::Result second = PDFLongTermValidation::addValidationData(first.document, QString(), 5000);
     QVERIFY(second.isOK());
     QCOMPARE(second.certificateCount, 0);
-    QCOMPARE(second.crlCount, 1);
+    QCOMPARE(second.crlCount, 0);
+    QVERIFY(second.warnings.isEmpty());
 
     const PDFDocument document = read(second.document);
     const auto* store = document.getCatalog()->getDocumentSecurityStore().getMasterItem();
@@ -667,6 +713,68 @@ void LongTermValidationTest::verificationReportOfChangedFile()
     QVERIFY(PDFSignatureReport::toHtml(report).contains("INVALID"));
 
     QVERIFY(!PDFSignatureReport::create("not a pdf", "x.pdf", QString(), false).isOpened);
+}
+
+void LongTermValidationTest::verificationReportIgnoresDecoyCertificate()
+{
+    for (const bool withSigner : { true, false })
+    {
+        PDFDocumentBuilder builder;
+        const PDFObjectReference page = builder.appendPage(QRectF(0, 0, 595, 842));
+        const PDFDocument document = builder.build();
+
+        PDFDocumentSigner::Parameters parameters;
+        parameters.document = &document;
+        parameters.signFunction = [this, withSigner](const QByteArray& data, QByteArray& result) { result = m_authority.signWithDecoy(m_good, data, withSigner); return !result.isEmpty(); };
+        parameters.createSignatureFieldFunction = [page](PDFDocumentBuilder& fieldBuilder, PDFObjectReference signatureDictionary)
+        {
+            return fieldBuilder.createSignatureField("Signature", signatureDictionary, page);
+        };
+        QByteArray signedDocument;
+        PDFDocumentSigner::sign(parameters, signedDocument);
+        if (signedDocument.isEmpty())
+        {
+            // Without the real certificate the signer's own check refuses it already
+            QVERIFY(!withSigner);
+            continue;
+        }
+
+        const PDFSignatureReport::Report report = PDFSignatureReport::create(signedDocument, "decoy.pdf", QString(), false);
+        QCOMPARE(report.signatures.size(), size_t(1));
+        const PDFSignatureReport::Signature& signature = report.signatures.front();
+        if (withSigner)
+        {
+            QVERIFY(!signature.chain.empty());
+            QCOMPARE(signature.chain.front().commonName, QString("Andre PDF test signer"));
+        }
+        else
+        {
+            QVERIFY(!signature.isIntegrityValid);
+            QVERIFY(signature.chain.empty());
+        }
+        QVERIFY(!PDFSignatureReport::toHtml(report).contains("Decoy Person") || withSigner);
+    }
+}
+
+void LongTermValidationTest::verificationReportGapInSignedRange()
+{
+    QByteArray signedDocument = sign(m_good, true);
+    QVERIFY(!signedDocument.isEmpty());
+
+    // Shift the second byte range one byte later: one signed byte is left out
+    const QRegularExpression byteRange(QStringLiteral("/ByteRange\\s*\\[\\s*0\\s+(\\d+)\\s+(\\d+)\\s+(\\d+)\\s*\\]"));
+    const QRegularExpressionMatch match = byteRange.match(QString::fromLatin1(signedDocument));
+    QVERIFY(match.hasMatch());
+    const QString original = match.captured(0);
+    QString changed = QString("/ByteRange [0 %1 %2 %3]").arg(match.captured(1)).arg(match.captured(2).toLongLong() + 1).arg(match.captured(3).toLongLong() - 1);
+    changed = changed.leftJustified(original.size(), QChar(' '));
+    QCOMPARE(changed.size(), original.size());
+    signedDocument.replace(original.toLatin1(), changed.toLatin1());
+
+    const PDFSignatureReport::Report report = PDFSignatureReport::create(signedDocument, "gap.pdf", QString(), false);
+    QCOMPARE(report.signatures.size(), size_t(1));
+    QVERIFY(!report.signatures.front().isIntegrityValid);
+    QVERIFY(!report.signatures.front().isCoveringWholeFile);
 }
 
 QTEST_MAIN(LongTermValidationTest)

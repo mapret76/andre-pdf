@@ -66,8 +66,13 @@ Signature menu → **Sign Contract…**
   signature only, or use "Allow form filling and signing" while others still sign.
 - After saving, the program reads the file back and shows what a reader will see.
 
-The signatures are **PAdES** (ETSI.CAdES.detached), the European and South African
-practice for signed PDFs.
+The signatures are **PAdES** (ETSI EN 319 142-1, `ETSI.CAdES.detached`), the European
+standard for signed PDFs, which Acrobat Reader and the accredited providers' tools
+check. The save dialog says which PAdES level the saved file reached (B-B to B-LTA).
+The program's own signature panel shows "bytes not covered" for a signature followed by
+validation data or a timestamp; that is expected, the report says what those bytes are.
+If the timestamp authority cannot be reached (offline), the program offers to sign
+without a timestamp.
 
 The **verification stamp** under the signature shows who signed, when, how the
 document is locked, your certificate's fingerprint, its issuer and serial number, and
@@ -92,7 +97,9 @@ How the other party (or a court) confirms the signer without Andre PDF:
 2. Confirm the fingerprint with you by another channel (telephone), or with the issuer
    of the certificate.
 3. With an accredited certificate the chain ends in the provider's root, which vouches
-   for your identity.
+   for your identity. The "Issued by" line of the stamp is only what the certificate
+   says; with your own (self-signed) certificate it proves nothing by itself, the
+   fingerprint comparison is the check.
 
 To sign by hand somewhere else, use **Place <signature>** in the Signature Toolbox,
 then **Sign Digitally With Certificate**.
@@ -148,7 +155,8 @@ deleted text struck through in red and inserted text underlined in blue.
 ## Android
 
 The Android app (open, read, signature library, sign every line or tap where to sign,
-lock, certificate from a `.pfx` file) is written and tested on the desktop. The APK
+lock, certificate from a `.pfx` file) is written and tested on the desktop. It signs
+PAdES B-B only: no timestamp and no long-term validation data. The APK
 needs a one-time GitHub permission first. See "Waiting on Andre" in `ANDRE-PDF.md`.
 
 ## Updates
@@ -164,10 +172,13 @@ Help → **Version History** shows every version and its changes.
 
 The stamp says "Electronically signed". What the law requires:
 - Where a law requires a signature (and the parties have not agreed otherwise), only an
-  **advanced electronic signature** counts (s13(1)). It needs a certificate from a
-  provider accredited by the South African Accreditation Authority (s37–38), for example
-  LAWtrust AeSign. Andre PDF signs with such a certificate like with any other: import
-  it in the Certificates Manager (or use it from the Windows store / its smart card).
+  **advanced electronic signature** counts (s13(1)). It must result from a process
+  accredited by the South African Accreditation Authority (s1, s37–38), for example
+  LAWtrust AeSign. Whether signing in Andre PDF with such a provider's certificate is
+  part of its accredited process is the provider's answer, not this program's: ask the
+  provider. Accredited keys usually sit on a token or smart card; Andre PDF uses them
+  from the Windows certificate store (this path still has to be checked with a real
+  token, see "Waiting on Andre" in ANDRE-PDF.md).
 - Where the parties only require an electronic signature, a reliable method that
   identifies you and shows your approval is enough (s13(3)); your own certificate
   does this. An electronic signature is not invalid only because it is electronic
