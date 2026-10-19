@@ -61,7 +61,8 @@ version history"; "an independent reviewer after every task ... functionality an
 - [x] R2 Independent review of B1-B3 and of the R1 fixes, findings fixed (R2-A.md, R2-B.md, R2-fixes.md)
 - [x] R3 Independent verification of the R2 fixes (R3.md), its findings fixed (R3-fixes.md)
 - [x] R4 Independent verification of the R3 fixes (R4.md), its findings fixed (R4-fixes.md, version 1.0.1)
-- [ ] B6 First release v1.0.0: Windows_MSI on master, then `tools/andre-release.sh <run>` on andre-vault (Andre types "yes")
+- [x] B6 First release v1.0.0: published 2026-10-19 20:18 UTC from 18b74e6 (Windows_MSI run 39309552290) on Andre's "yes"; MSI SHA-256 c15cbe35...be20, manifest signature verified against the built-in key
+- [ ] B7 Release v1.0.1 (R4 fixes, 3d08338, Windows_MSI run 39314956857) on Andre's "yes" - also the first end-to-end test of the updater from an installed 1.0.0
 Every task of queue B gets an independent review before it is ticked (`docs/andre/reviews/`).
 
 Waiting on Andre:
@@ -574,3 +575,16 @@ upstream author's machine, not ours).
   signing offers to go on without a timestamp when the authority cannot be reached.
 - Open gate (R2-A M5): the Windows certificate store / token path and an Acrobat / EU DSS
   check of a B-LTA file, under "Waiting on Andre".
+
+### 2026-10-19 - v1.0.0 published; R3/R4 reviewed and fixed
+- R3 (verification of the R2 fixes) and R4 (verification of the R3 fixes): no high findings;
+  R3's mediums (signature chosen by byte ranges, chain in the signing-certificate attribute,
+  CRL freshness) and R4's medium (chain IDs not in the signature) fixed; see
+  `docs/andre/reviews/R3-fixes.md`, `R4-fixes.md`. The Windows CI found a link error
+  (nested `Extension` not exported), fixed in 18b74e6.
+- **v1.0.0 is published** (github.com/mapret76/andre-pdf/releases/tag/v1.0.0): the release
+  script checked master, version and changelog, signed the manifest, verified it, and
+  published after Andre's "yes". Checked afterwards: `releases/latest` serves the manifest,
+  its signature verifies with `Pdf4QtLibCore/andre-pdf-release-key.pub.pem`, the MSI's
+  SHA-256 matches the manifest.
+- 1.0.1 (R4 fixes) is on master (3d08338), its installer building (run 39314956857).
