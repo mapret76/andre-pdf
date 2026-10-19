@@ -87,7 +87,8 @@ public:
                                      QString* fieldName = nullptr);
 
     /// Extension of a signed document to PAdES B-LTA
-    struct Extension
+    /// Exported on its own: MSVC does not export the members of a nested type with the class
+    struct PDF4QTLIBCORESHARED_EXPORT Extension
     {
         QByteArray document;            ///< The extended document; the signed document itself when nothing could be added
         Result validation;              ///< Validation data added (B-LT)
