@@ -40,6 +40,7 @@ namespace signdialog
 
 constexpr const char* SETTINGS_GROUP = "SignaturePlugin";
 constexpr const char* SETTINGS_SIGNATURE_TYPE = "SignatureType";
+constexpr const char* SETTINGS_LONG_TERM = "LongTermValidation";
 constexpr const char* SETTINGS_TIMESTAMP_URL = "TimestampUrl";
 constexpr const char* SETTINGS_CERTIFICATION = "Certification";
 
@@ -70,7 +71,7 @@ SignDialog::SignDialog(QWidget* parent, bool isSceneEmpty, bool canCertify) :
     ui->signatureTypeCombo->addItem(tr("Signature"), SignatureOnly);
     ui->signatureTypeCombo->addItem(tr("Signature with timestamp"), SignatureWithTimestamp);
     ui->signatureTypeCombo->addItem(tr("Document timestamp only"), TimestampOnly);
-    ui->signatureTypeCombo->setCurrentIndex(0);
+    ui->signatureTypeCombo->setCurrentIndex(1);
 
     for (const char* timestampUrl : DEFAULT_TIMESTAMP_URLS)
     {
@@ -97,6 +98,7 @@ SignDialog::SignDialog(QWidget* parent, bool isSceneEmpty, bool canCertify) :
 
     connect(ui->signatureTypeCombo, &QComboBox::currentIndexChanged, this, &SignDialog::updateUi);
     connect(ui->encryptCheckBox, &QCheckBox::toggled, this, &SignDialog::updateUi);
+    ui->longTermCheckBox->setToolTip(tr("PAdES B-LTA: the certificates and their revocation status (OCSP, CRL) are embedded and protected by a document timestamp, so a third party can still verify the signature after the certificate has expired."));
     ui->encryptCheckBox->setToolTip(m_canCertify ? tr("The document is encrypted with AES-256 before it is signed, so encryption never breaks the signature.")
                                                  : tr("The document is already signed, encrypting it would break the signatures."));
     updateUi();
@@ -130,6 +132,11 @@ QString SignDialog::getReasonText() const
 QString SignDialog::getContactInfoText() const
 {
     return ui->contactInfoEdit->text();
+}
+
+bool SignDialog::isLongTermValidation() const
+{
+    return getSignatureType() == SignatureWithTimestamp && ui->longTermCheckBox->isChecked();
 }
 
 QString SignDialog::getTimestampUrl() const
@@ -267,6 +274,7 @@ void SignDialog::updateUi()
 
     ui->timestampUrlLabel->setEnabled(isTimestampUsed);
     ui->timestampUrlCombo->setEnabled(isTimestampUsed);
+    ui->longTermCheckBox->setEnabled(signatureType == SignatureWithTimestamp);
 }
 
 void SignDialog::loadSettings()
@@ -274,11 +282,13 @@ void SignDialog::loadSettings()
     QSettings settings;
     settings.beginGroup(SETTINGS_GROUP);
 
-    const int signatureTypeIndex = ui->signatureTypeCombo->findData(settings.value(SETTINGS_SIGNATURE_TYPE, SignatureOnly).toInt());
+    const int signatureTypeIndex = ui->signatureTypeCombo->findData(settings.value(SETTINGS_SIGNATURE_TYPE, SignatureWithTimestamp).toInt());
     if (signatureTypeIndex != -1)
     {
         ui->signatureTypeCombo->setCurrentIndex(signatureTypeIndex);
     }
+
+    ui->longTermCheckBox->setChecked(settings.value(SETTINGS_LONG_TERM, true).toBool());
 
     const QString timestampUrl = settings.value(SETTINGS_TIMESTAMP_URL).toString();
     if (!timestampUrl.isEmpty())
@@ -300,6 +310,7 @@ void SignDialog::saveSettings()
     QSettings settings;
     settings.beginGroup(SETTINGS_GROUP);
     settings.setValue(SETTINGS_SIGNATURE_TYPE, int(getSignatureType()));
+    settings.setValue(SETTINGS_LONG_TERM, ui->longTermCheckBox->isChecked());
     settings.setValue(SETTINGS_TIMESTAMP_URL, getTimestampUrl());
     if (m_canCertify)
     {

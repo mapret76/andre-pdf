@@ -133,6 +133,10 @@ public:
     static bool verifyTimestampToken(const QByteArray& data, const QByteArray& token);
 
 private:
+    /// DER encoding of the CAdES signing-certificate-v2 attribute value (SHA-256
+    /// of the certificate plus its issuer and serial), empty on failure
+    static QByteArray createSigningCertificateV2(const QByteArray& certificateData);
+
     static bool signImpl_Win(const PDFCertificateEntry& certificateEntry,
                              QString password,
                              QByteArray data,

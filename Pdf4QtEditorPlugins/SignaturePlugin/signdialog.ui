@@ -81,45 +81,55 @@
         </property>
        </widget>
       </item>
-      <item row="5" column="0">
+      <item row="5" column="0" colspan="2">
+       <widget class="QCheckBox" name="longTermCheckBox">
+        <property name="text">
+         <string>Long-term validation: embed certificates, revocation data and a document timestamp</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="6" column="0">
        <widget class="QLabel" name="certificationLabel">
         <property name="text">
          <string>Lock (certify)</string>
         </property>
        </widget>
       </item>
-      <item row="5" column="1">
+      <item row="6" column="1">
        <widget class="QComboBox" name="certificationCombo"/>
       </item>
-      <item row="6" column="0" colspan="2">
+      <item row="7" column="0" colspan="2">
        <widget class="QCheckBox" name="encryptCheckBox">
         <property name="text">
          <string>Encrypt: a password is needed to open the signed document</string>
         </property>
        </widget>
       </item>
-      <item row="7" column="0">
+      <item row="8" column="0">
        <widget class="QLabel" name="openPasswordLabel">
         <property name="text">
          <string>Password to open</string>
         </property>
        </widget>
       </item>
-      <item row="7" column="1">
+      <item row="8" column="1">
        <widget class="QLineEdit" name="openPasswordEdit">
         <property name="echoMode">
          <enum>QLineEdit::Password</enum>
         </property>
        </widget>
       </item>
-      <item row="8" column="0">
+      <item row="9" column="0">
        <widget class="QLabel" name="openPasswordConfirmLabel">
         <property name="text">
          <string>Confirm password</string>
         </property>
        </widget>
       </item>
-      <item row="8" column="1">
+      <item row="9" column="1">
        <widget class="QLineEdit" name="openPasswordConfirmEdit">
         <property name="echoMode">
          <enum>QLineEdit::Password</enum>

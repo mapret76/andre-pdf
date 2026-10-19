@@ -23,6 +23,7 @@
 #ifndef SIGNATURESPLUGIN_H
 #define SIGNATURESPLUGIN_H
 
+#include "pdflongtermvalidation.h"
 #include "pdfsignaturelibrary.h"
 #include "pdfdocumentsigner.h"
 #include "pdfplugin.h"
@@ -147,7 +148,14 @@ private:
     void updateSignatureSlots();
 
     /// Reads the saved signed file back and reports what a reader finds in it
-    void checkSavedFile(const QString& fileName, const QString& signatureName, const QString& password, bool isDocumentTimestamp);
+    /// Checks the saved file; with an extension (PAdES B-LTA) the signature is checked in
+    /// \p signedDocument, which the saved file must begin with
+    void checkSavedFile(const QString& fileName, const QString& signatureName, const QString& password, bool isDocumentTimestamp,
+                        const pdf::PDFLongTermValidation::Extension* extension = nullptr, const QByteArray& signedDocument = QByteArray());
+
+    /// Extends the signed document to PAdES B-LTA; on an exception the document stays as signed
+    static std::optional<pdf::PDFLongTermValidation::Extension> extendSignature(QByteArray& signedDocument, const QString& password,
+                                                                              const pdf::PDFSignatureFactory::TimestampSettings& settings);
 
     std::array<QAction*, LastAction> m_actions;
     std::array<pdf::PDFWidgetTool*, LastTool> m_tools;

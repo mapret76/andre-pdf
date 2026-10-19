@@ -317,6 +317,15 @@ set_target_properties(UnitTestsUpdate PROPERTIES
 )
 add_test(UnitTestsUpdate "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsUpdate")
 
+add_executable(UnitTestsLongTermValidation tst_longtermvalidationtest.cpp)
+target_link_libraries(UnitTestsLongTermValidation PRIVATE Pdf4QtLibCore Qt6::Core Qt6::Gui Qt6::Network Qt6::Test OpenSSL::Crypto)
+set_target_properties(UnitTestsLongTermValidation PROPERTIES
+    WIN32_EXECUTABLE OFF
+    MACOSX_BUNDLE OFF
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}
+)
+add_test(UnitTestsLongTermValidation "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsLongTermValidation")
+
 add_executable(UnitTestsTimestamp tst_timestamptest.cpp)
 target_link_libraries(UnitTestsTimestamp PRIVATE Pdf4QtLibCore Qt6::Core Qt6::Gui Qt6::Network Qt6::Test OpenSSL::Crypto)
 set_target_properties(UnitTestsTimestamp PROPERTIES

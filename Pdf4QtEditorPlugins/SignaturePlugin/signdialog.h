@@ -83,6 +83,9 @@ public:
 
     /// Returns the password needed to open the signed document, when it is to be encrypted
     std::optional<QString> getEncryptionPassword() const;
+
+    /// Returns true, if the signature is to be extended to PAdES B-LTA (only with a timestamp)
+    bool isLongTermValidation() const;
     const pdf::PDFCertificateEntry* getCertificate() const;
 
 private:

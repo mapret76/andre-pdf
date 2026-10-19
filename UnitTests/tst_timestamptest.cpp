@@ -27,6 +27,7 @@
 #include "pdfdocumentreader.h"
 #include "pdfdocumentsigner.h"
 #include "pdfform.h"
+#include "pdflongtermvalidation.h"
 #include "pdfsecurityhandler.h"
 #include "pdfsignaturehandler.h"
 
@@ -606,6 +607,7 @@ private slots:
     void enlargedReservedSpace_data();
     void enlargedReservedSpace();
     void timestampAddedToSignedDocument();
+    void longTermDocumentTimestamp();
 
     void publicTimestampAuthority();
 
@@ -1584,6 +1586,55 @@ void TimestampTest::timestampAddedToSignedDocument()
         QVERIFY2(result.isSignatureValid(), qPrintable(result.getErrors().join(' ')));
         QVERIFY(result.getTimestampDate().isValid());
     }
+}
+
+void TimestampTest::longTermDocumentTimestamp()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    PDFCertificateEntry certificate;
+    QString password;
+    QVERIFY(createTestCertificate(directory, certificate, password));
+
+    PDFDocumentBuilder builder;
+    const PDFObjectReference page = builder.appendPage(QRectF(0, 0, 300, 400));
+    PDFDocument document = builder.build();
+
+    auto signFunction = [&](const QByteArray& data, QByteArray& signature)
+    {
+        return PDFSignatureFactory::sign(certificate, password, data, signature);
+    };
+    QByteArray signedDocument;
+    QCOMPARE(signDocument(document, page, signFunction, false, signedDocument), PDFDocumentSigner::Result::OK);
+
+    // PAdES B-LTA: the document timestamp over the signed document (and its store)
+    QByteArray timestampedDocument;
+    QString errorMessage;
+    QVERIFY2(PDFLongTermValidation::addDocumentTimestamp(signedDocument, QString(), getTimestampSettings(), timestampedDocument, errorMessage), qPrintable(errorMessage));
+    QVERIFY(timestampedDocument.startsWith(signedDocument));
+
+    const auto results = verifySignedDocument(timestampedDocument, m_authority.getCertificate());
+    QCOMPARE(results.size(), size_t(2));
+    for (const PDFSignatureVerificationResult& result : results)
+    {
+        QVERIFY2(result.isSignatureValid(), qPrintable(result.getErrors().join(' ')));
+    }
+
+    // The whole extension: validation data (a self-signed certificate needs no
+    // revocation data), then the document timestamp; the saved file passes the check
+    const PDFLongTermValidation::Extension extension = PDFLongTermValidation::extend(signedDocument, QString(), getTimestampSettings());
+    QVERIFY2(extension.validation.isOK(), qPrintable(extension.validation.error));
+    QVERIFY2(!extension.timestampFieldName.isEmpty(), qPrintable(extension.timestampError));
+    QVERIFY(PDFLongTermValidation::checkExtendedFile(extension.document, signedDocument, "Signature", extension.timestampFieldName, QString()).isOK());
+    QVERIFY(!PDFLongTermValidation::checkExtendedFile(extension.document.chopped(10), signedDocument, "Signature", extension.timestampFieldName, QString()).isOK());
+
+    // An unreachable authority is reported and nothing is returned
+    PDFSignatureFactory::TimestampSettings unreachable;
+    unreachable.url = "http://127.0.0.1:1/";
+    unreachable.timeoutMilliseconds = 2000;
+    QByteArray failed;
+    QVERIFY(!PDFLongTermValidation::addDocumentTimestamp(signedDocument, QString(), unreachable, failed, errorMessage));
+    QVERIFY(!errorMessage.isEmpty());
 }
 
 void TimestampTest::publicTimestampAuthority()

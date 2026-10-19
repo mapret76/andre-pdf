@@ -680,6 +680,15 @@ bool SignaturePlugin::onSignDigitally()
             return false;
         }
 
+        // PAdES B-LTA: certificates, revocation data and a document timestamp are appended
+        const QString documentPassword = parameters.encryptionUserPassword.value_or(parameters.openPassword);
+        const QByteArray signedBytes = signedDocument;
+        std::optional<pdf::PDFLongTermValidation::Extension> extension;
+        if (dialog.isLongTermValidation())
+        {
+            extension = extendSignature(signedDocument, documentPassword, timestampSettings);
+        }
+
         QString fileName = QFileDialog::getSaveFileName(m_dataExchangeInterface->getMainWindow(), tr("Save Signed Document"), getSignedFileName(), tr("Portable Document (*.pdf);;All files (*.*)"));
         if (fileName.isEmpty())
         {
@@ -693,12 +702,32 @@ bool SignaturePlugin::onSignDigitally()
             return false;
         }
         signedFile.close();
-        checkSavedFile(fileName, signatureName, parameters.encryptionUserPassword.value_or(parameters.openPassword), isDocumentTimestamp);
+        checkSavedFile(fileName, signatureName, documentPassword, isDocumentTimestamp, extension ? &*extension : nullptr, signedBytes);
         return true;
     }
 }
 
-void SignaturePlugin::checkSavedFile(const QString& fileName, const QString& signatureName, const QString& password, bool isDocumentTimestamp)
+std::optional<pdf::PDFLongTermValidation::Extension> SignaturePlugin::extendSignature(QByteArray& signedDocument, const QString& password,
+                                                                                    const pdf::PDFSignatureFactory::TimestampSettings& settings)
+{
+    std::optional<pdf::PDFLongTermValidation::Extension> extension;
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    try
+    {
+        extension = pdf::PDFLongTermValidation::extend(signedDocument, password, settings);
+        signedDocument = extension->document;
+    }
+    catch (const std::exception&)
+    {
+        // The document stays as it was signed (PAdES B-T)
+        extension.reset();
+    }
+    QApplication::restoreOverrideCursor();
+    return extension;
+}
+
+void SignaturePlugin::checkSavedFile(const QString& fileName, const QString& signatureName, const QString& password, bool isDocumentTimestamp,
+                                     const pdf::PDFLongTermValidation::Extension* extension, const QByteArray& signedDocument)
 {
     // The file is read back from the disk, as a reader will get it, so that what is
     // reported is what was really saved
@@ -710,7 +739,8 @@ void SignaturePlugin::checkSavedFile(const QString& fileName, const QString& sig
         file.close();
     }
 
-    const pdf::PDFDocumentSigner::SignedFileCheck check = pdf::PDFDocumentSigner::checkSignedFile(data, signatureName, password);
+    const pdf::PDFDocumentSigner::SignedFileCheck check = extension ? pdf::PDFLongTermValidation::checkExtendedFile(data, signedDocument, signatureName, extension->timestampFieldName, password)
+                                                                     : pdf::PDFDocumentSigner::checkSignedFile(data, signatureName, password);
     if (!check.isOK())
     {
         QString message = tr("The saved file %1 did not pass the check after saving: ").arg(QDir::toNativeSeparators(fileName));
@@ -732,7 +762,12 @@ void SignaturePlugin::checkSavedFile(const QString& fileName, const QString& sig
 
     QStringList lines;
     lines << (isDocumentTimestamp ? tr("The document timestamp was saved and checked:") : tr("The document was signed, saved and checked:"));
-    lines << tr("- the signature is valid and covers the whole file");
+    lines << (extension ? tr("- the signature is valid; only its long-term validation data follows it in the file")
+                        : tr("- the signature is valid and covers the whole file"));
+    if (extension)
+    {
+        lines << extension->getReport();
+    }
     const QString certificationText = pdf::PDFSignatureStamp::getCertificationText(check.certification);
     lines << (certificationText.isEmpty() ? tr("- the document is not locked (approval signature)") : tr("- %1").arg(certificationText));
     if (check.isEncrypted)
@@ -1085,6 +1120,14 @@ void SignaturePlugin::onSignPack()
             continue;
         }
 
+        // PAdES B-LTA for each contract, as for a single signature
+        const QByteArray signedBytes = signedDocument;
+        std::optional<pdf::PDFLongTermValidation::Extension> extension;
+        if (signDialog.isLongTermValidation())
+        {
+            extension = extendSignature(signedDocument, parameters.encryptionUserPassword.value_or(QString()), timestampSettings);
+        }
+
         // Existing files are never overwritten
         QString fileName = packDialog.getOutputDirectory() + "/" + pdf::PDFContractPack::getFileName(packDialog.getBaseName(), part, partIndex);
         for (int attempt = 2; QFile::exists(fileName); ++attempt)
@@ -1103,11 +1146,20 @@ void SignaturePlugin::onSignPack()
         // The check reads the file back from the disk, as a reader gets it
         QFile writtenFile(fileName);
         const QByteArray written = writtenFile.open(QFile::ReadOnly) ? writtenFile.readAll() : QByteArray();
-        const pdf::PDFDocumentSigner::SignedFileCheck check = pdf::PDFDocumentSigner::checkSignedFile(written, fieldName, parameters.encryptionUserPassword.value_or(QString()));
+        const QString password = parameters.encryptionUserPassword.value_or(QString());
+        const pdf::PDFDocumentSigner::SignedFileCheck check = extension ? pdf::PDFLongTermValidation::checkExtendedFile(written, signedBytes, fieldName, extension->timestampFieldName, password)
+                                                                         : pdf::PDFDocumentSigner::checkSignedFile(written, fieldName, password);
         report << tr("%1: %2 lines signed (%3), %4 left for another party, %5 - %6")
                       .arg(part.name).arg(placements.size() + 1).arg(signedLabels.join(", ")).arg(otherLines)
                       .arg(check.isOK() ? pdf::PDFSignatureStamp::getCertificationText(check.certification) : tr("CHECK FAILED"))
                       .arg(QFileInfo(fileName).fileName());
+        if (extension)
+        {
+            for (const QString& line : extension->getReport())
+            {
+                report << QString("    ") + line;
+            }
+        }
         failures += check.isOK() ? 0 : 1;
     }
     QApplication::restoreOverrideCursor();

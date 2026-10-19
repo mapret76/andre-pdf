@@ -56,8 +56,10 @@
 #include <openssl/cms.h>
 #include <openssl/objects.h>
 #include <openssl/ts.h>
+#include <openssl/ess.h>
 
 #include <array>
+#include <vector>
 #include <memory>
 
 namespace pdf
@@ -329,18 +331,29 @@ bool PDFSignatureFactory::sign(const PDFCertificateEntry& certificateEntry,
                 openssl_ptr<BIO> signedDataBuffer(BIO_new(BIO_s_mem()), &BIO_free_all);
                 BIO_write(signedDataBuffer.get(), data.constData(), data.length());
 
-                PKCS7* signature = PKCS7_sign(certificate, key, certificates, signedDataBuffer.get(), PKCS7_DETACHED | PKCS7_BINARY);
+                // Andre PDF: a CAdES signature for the PAdES baseline profile (ETSI EN
+                // 319 142-1): signed attributes content-type, message-digest and
+                // signing-certificate-v2 (binds the signer's certificate), no
+                // signing-time attribute (the time is the /M entry or a timestamp).
+                unsigned int flags = CMS_DETACHED | CMS_BINARY | CMS_NOSMIMECAP;
+#ifdef CMS_CADES
+                flags |= CMS_CADES;
+#endif
+#ifdef CMS_NO_SIGNING_TIME
+                flags |= CMS_NO_SIGNING_TIME;
+#endif
+                CMS_ContentInfo* signature = CMS_sign(certificate, key, certificates, signedDataBuffer.get(), flags);
                 if (signature)
                 {
                     openssl_ptr<BIO> outputBuffer(BIO_new(BIO_s_mem()), &BIO_free_all);
-                    i2d_PKCS7_bio(outputBuffer.get(), signature);
+                    i2d_CMS_bio(outputBuffer.get(), signature);
 
                     BUF_MEM* pksMemoryBuffer = nullptr;
                     BIO_get_mem_ptr(outputBuffer.get(), &pksMemoryBuffer);
 
                     result = QByteArray(pksMemoryBuffer->data, int(pksMemoryBuffer->length));
 
-                    PKCS7_free(signature);
+                    CMS_ContentInfo_free(signature);
                     EVP_PKEY_free(key);
                     X509_free(certificate);
                     sk_X509_free(certificates);
@@ -757,6 +770,34 @@ bool PDFSignatureFactory::verifyTimestampToken(const QByteArray& data, const QBy
 #endif
 #endif
 
+QByteArray pdf::PDFSignatureFactory::createSigningCertificateV2(const QByteArray& certificateData)
+{
+    const unsigned char* pointer = reinterpret_cast<const unsigned char*>(certificateData.constData());
+    openssl_ptr<X509> certificate(d2i_X509(nullptr, &pointer, certificateData.size()), &X509_free);
+    if (!certificate)
+    {
+        return QByteArray();
+    }
+
+    ESS_SIGNING_CERT_V2* signingCertificate = OSSL_ESS_signing_cert_v2_new_init(EVP_sha256(), certificate.get(), nullptr, 1);
+    if (!signingCertificate)
+    {
+        return QByteArray();
+    }
+
+    unsigned char* buffer = nullptr;
+    const int length = i2d_ESS_SIGNING_CERT_V2(signingCertificate, &buffer);
+    ESS_SIGNING_CERT_V2_free(signingCertificate);
+
+    QByteArray result;
+    if (length > 0)
+    {
+        result = QByteArray(reinterpret_cast<const char*>(buffer), length);
+    }
+    OPENSSL_free(buffer);
+    return result;
+}
+
 bool pdf::PDFSignatureFactory::signImpl_Win(const pdf::PDFCertificateEntry& certificateEntry, QString password, QByteArray data, QByteArray& result)
 {
     bool success = false;
@@ -785,7 +826,6 @@ bool pdf::PDFSignatureFactory::signImpl_Win(const pdf::PDFCertificateEntry& cert
             CRYPT_SIGN_MESSAGE_PARA SignParams{};
             BYTE* pbSignedBlob = nullptr;
             DWORD cbSignedBlob = 0;
-            PCCERT_CONTEXT pCertContextArray[1] = { pCertContext };
 
             const BYTE* pbDataToBeSigned = (const BYTE*)data.constData();
             DWORD cbDataToBeSigned = (DWORD)data.size();
@@ -802,9 +842,35 @@ bool pdf::PDFSignatureFactory::signImpl_Win(const pdf::PDFCertificateEntry& cert
             SignParams.HashAlgorithm.pszObjId = (LPSTR)szOID_NIST_sha256;
             SignParams.HashAlgorithm.Parameters.cbData = 0;
             SignParams.HashAlgorithm.Parameters.pbData = NULL;
-            SignParams.cMsgCert = 1;
-            SignParams.rgpMsgCert = pCertContextArray;
-            pCertContextArray[0] = pCertContext;
+            // Andre PDF: the chain up to the root goes into the signature, so a
+            // verifier (and the long-term validation data) has every issuer
+            std::vector<PCCERT_CONTEXT> messageCertificates = { pCertContext };
+            PCCERT_CHAIN_CONTEXT chainContext = nullptr;
+            CERT_CHAIN_PARA chainParameters{};
+            chainParameters.cbSize = sizeof(CERT_CHAIN_PARA);
+            if (CertGetCertificateChain(nullptr, pCertContext, nullptr, nullptr, &chainParameters, 0, nullptr, &chainContext) &&
+                chainContext && chainContext->cChain > 0)
+            {
+                const PCERT_SIMPLE_CHAIN chain = chainContext->rgpChain[0];
+                for (DWORD i = 1; i < chain->cElement; ++i)
+                {
+                    messageCertificates.push_back(chain->rgpElement[i]->pCertContext);
+                }
+            }
+            SignParams.cMsgCert = DWORD(messageCertificates.size());
+            SignParams.rgpMsgCert = messageCertificates.data();
+
+            // Andre PDF: CAdES signing-certificate-v2 signed attribute (PAdES
+            // baseline). CryptoAPI adds content-type and message-digest itself
+            // when signed attributes are present, and no signing-time.
+            const QByteArray signingCertificate = createSigningCertificateV2(certificateEntry.info.getCertificateData());
+            CRYPT_ATTR_BLOB signingCertificateBlob{ DWORD(signingCertificate.size()), (BYTE*)signingCertificate.constData() };
+            CRYPT_ATTRIBUTE signingCertificateAttribute{ (LPSTR)"1.2.840.113549.1.9.16.2.47", 1, &signingCertificateBlob };
+            if (!signingCertificate.isEmpty())
+            {
+                SignParams.cAuthAttr = 1;
+                SignParams.rgAuthAttr = &signingCertificateAttribute;
+            }
 
             const BYTE* rgpbToBeSigned[1] = {pbDataToBeSigned};
             DWORD rgcbToBeSigned[1] = {cbDataToBeSigned};
@@ -838,6 +904,11 @@ bool pdf::PDFSignatureFactory::signImpl_Win(const pdf::PDFCertificateEntry& cert
             }
 
             delete[] pbSignedBlob;
+
+            if (chainContext)
+            {
+                CertFreeCertificateChain(chainContext);
+            }
 
             CertFreeCertificateContext(pCertContext);
         }

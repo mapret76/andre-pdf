@@ -120,7 +120,7 @@ public:
         CreateSignatureFieldFunction createSignatureFieldFunction;
 
         QByteArray filter = "Adobe.PPKLite";
-        QByteArray subfilter = "adbe.pkcs7.detached";
+        QByteArray subfilter = "ETSI.CAdES.detached";
 
         /// Type of the created signature dictionary - "Sig" for a digital
         /// signature and "DocTimeStamp" for a document timestamp
