@@ -48,6 +48,18 @@ Queue:
 - [x] A15 Phase 7: scan-font engine
 - [x] A16 Release: MSI + APK from CI, ledger and skill final, user guide in docs/andre/
 
+Queue B (Andre, 2026-10-19: "digital signing compliant with South African law ... a way for
+a third party to confirm the ID of the certificate and author"; "version control ... check for
+new versions, download and install when the user agrees ... summary of what changes ... full
+version history"; "an independent reviewer after every task ... functionality and security"):
+- [ ] R0 Independent review of A1-A16 (two reviewers, fresh context), findings fixed
+- [ ] B1 PAdES signatures: ETSI.CAdES.detached with signing-certificate-v2, timestamp by default, LTV (DSS: chain, OCSP/CRL), document timestamp
+- [ ] B2 "Verify Signatures" report for third parties: signer identity (subject, issuer, serial, fingerprints), chain, revocation, integrity, lock, AES (accredited) or ordinary electronic signature
+- [ ] B3 Stamp and QR carry issuer and serial of the certificate
+- [ ] B4 Versions: Andre PDF version number, CHANGELOG.md, Help -> Version History, "What's new" after an update
+- [ ] B5 Updates: check (start-up + Help), summary of every newer version, download, verify the signed manifest (ECDSA P-256, key in a vault file per Andre) and SHA-256, install on consent; release script
+Every task of queue B gets an independent review before it is ticked (`docs/andre/reviews/`).
+
 Waiting on Andre:
 - **GitHub `workflow` scope for the vault (blocks A14 Android CI and any change under
   `.github/workflows/`).** The vault's `gh` token has only `repo`, `gist` and `read:org`, so
@@ -105,6 +117,9 @@ behind it in [docs/andre/options-report.md](docs/andre/options-report.md).
 | 2026-10-18 | *(autopilot)* Contract signing = the default contract mode of the rules: the library image on every line Andre signs, and **one** certification signature (one PIN) whose visible appearance is the last line, with the stamp. Every found line must be decided ("I sign" / "Other party") before Sign & Lock is enabled; "Other party" lines make the lock P=2 (they can still sign), otherwise P=1 | Requirement 8 ("cannot close until all are signed") becomes "cannot lock until every line is decided", which is enforceable in the workflow. The program window is not stopped from closing. Separate digital signatures per line (field `/Lock`) are deferred until a contract needs them. An existing unsigned signature field gets the image, but the digital signature goes into a new field. |
 | 2026-10-18 | *(autopilot)* Word/Excel export written by the program itself (Office Open XML in a stored ZIP, no new library): Word gets the paragraphs and pages, Excel one sheet per page with rows split into cells at gaps of 1.5 em and numbers as numbers (South African "1 234,56" understood). On Windows with Word installed, "Open in Word" (Word's own PDF conversion) is offered first | Andre has Microsoft 365, and Word's conversion keeps the layout better than anything we could ship free. The AGPL tools (pdf2docx on PyMuPDF) stay out. For one table, the existing Select Table tool copies it as CSV for Excel. |
 | 2026-10-18 | *(autopilot)* Scan-font engine written from scratch in C++ (connected components, averaging, pixel-edge tracing, Douglas-Peucker, a TrueType writer with straight outlines) instead of jbig2enc + autotrace + fontTools | autotrace (and Potrace) are GPL and must not be shipped, fontTools is Python. The OpenType format is public. Straight segments at 1000 units per em are smooth enough at text sizes. |
+| 2026-10-19 | Release-signing key in an owner-only file on andre-vault | Andre's choice (asked 2026-10-19), knowingly departing from the rule that secrets live on VM2 or the broker. The app ships only the public key and refuses any update not signed by it. |
+| 2026-10-19 | Every task reviewed by an independent agent (fresh context, own git worktree and build) for functionality and security; findings fixed before ticking; A1-A16 reviewed retroactively | Andre's requirement. The reviewer never commits; its report is kept in `docs/andre/reviews/`. |
+| 2026-10-19 | South African law: Andre PDF produces standard PAdES signatures and a third-party verification report; whether a signature is an *advanced* electronic signature depends on the certificate (an SAAA-accredited provider, ECT Act s13(1), s37-38), which the report states | Software cannot make a signature advanced. ECT Act s4(3) and Schedule 2 exclude some documents (for example the alienation of immovable property, long leases of land, wills, bills of exchange); the user guide says so. |
 | 2026-10-18 | *(autopilot)* Rebrand only the names users see: Andre PDF Editor / Viewer / Pages / Compare, launcher "Andre PDF", installer "Andre PDF" by Andre Pretorius with a new upgrade code; internal application and organisation names stay `PDF4QT ...` / `MelkaJ` | Settings and the OCR model folders are keyed on the internal names. The new upgrade code installs alongside an upstream PDF4QT install instead of replacing it. |
 
 ## Roadmap
