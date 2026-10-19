@@ -28,12 +28,13 @@
 #include <QPushButton>
 #include <QVBoxLayout>
 #include <QTextBrowser>
+#include <QTextDocument>
 #include <QDialogButtonBox>
 
 namespace pdfviewer
 {
 
-PDFUpdateDialog::PDFUpdateDialog(QWidget* parent, const pdf::PDFUpdateChecker::Update& update, const QString& currentVersion) :
+PDFUpdateDialog::PDFUpdateDialog(QWidget* parent, const pdf::PDFUpdateChecker::Update& update, const QString& currentVersion, bool isAutomatic) :
     QDialog(parent),
     m_browser(new QTextBrowser(this))
 {
@@ -45,14 +46,17 @@ PDFUpdateDialog::PDFUpdateDialog(QWidget* parent, const pdf::PDFUpdateChecker::U
     label->setWordWrap(true);
     layout->addWidget(label);
 
-    m_browser->setMarkdown(pdf::PDFVersionHistory::toMarkdown(update.releases));
+    // The text is shown as written: no HTML, no links to follow
+    m_browser->setOpenLinks(false);
+    m_browser->document()->setMarkdown(pdf::PDFVersionHistory::toMarkdown(update.releases), QTextDocument::MarkdownFeatures(QTextDocument::MarkdownDialectGitHub | QTextDocument::MarkdownNoHTML));
     layout->addWidget(m_browser);
 
     QDialogButtonBox* buttonBox = new QDialogButtonBox(this);
     QPushButton* install = buttonBox->addButton(tr("Download and Install"), QDialogButtonBox::AcceptRole);
     QPushButton* later = buttonBox->addButton(tr("Remind Me Later"), QDialogButtonBox::RejectRole);
     QPushButton* skip = buttonBox->addButton(tr("Skip This Version"), QDialogButtonBox::DestructiveRole);
-    install->setDefault(true);
+    // An offer that pops up at start must not be accepted by an Enter meant for something else
+    (isAutomatic ? later : install)->setDefault(true);
     connect(install, &QPushButton::clicked, this, [this]() { m_choice = Choice::Install; accept(); });
     connect(later, &QPushButton::clicked, this, [this]() { m_choice = Choice::Later; reject(); });
     connect(skip, &QPushButton::clicked, this, [this]() { m_choice = Choice::Skip; reject(); });

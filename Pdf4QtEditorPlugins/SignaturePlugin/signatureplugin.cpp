@@ -39,6 +39,7 @@
 #include "pdfcontractpack.h"
 #include "pdfsignaturelinefinder.h"
 #include "pdfpageinitials.h"
+#include "pdfsignaturereport.h"
 
 #include <QBuffer>
 #include <QAction>
@@ -50,6 +51,13 @@
 #include <QLineEdit>
 #include <QInputDialog>
 #include <QDir>
+#include <QDialogButtonBox>
+#include <QPageSize>
+#include <QPdfWriter>
+#include <QPushButton>
+#include <QTextBrowser>
+#include <QTextDocument>
+#include <QVBoxLayout>
 
 namespace pdfplugin
 {
@@ -103,6 +111,9 @@ void SignaturePlugin::setWidget(pdf::PDFWidget* widget)
     QAction* signPackAction = new QAction(QIcon(":/pdfplugins/signatureplugin/sign-pack.svg"), tr("Split && Sign Contract &Pack..."), this);
     signPackAction->setObjectName("signaturetool_signPackAction");
     m_actions[SignPack] = signPackAction;
+    QAction* verificationReportAction = new QAction(QIcon(":/pdfplugins/signatureplugin/certificates.svg"), tr("Signature &Verification Report..."), this);
+    verificationReportAction->setObjectName("signaturetool_verificationReportAction");
+    m_actions[VerificationReport] = verificationReportAction;
     QAction* clearAction = new QAction(QIcon(":/pdfplugins/signatureplugin/clear.svg"), tr("Clear All &Graphics"), this);
     QAction* signElectronicallyAction = new QAction(QIcon(":/pdfplugins/signatureplugin/sign-electronically.svg"), tr("Sign &Electronically"), this);
     QAction* signDigitallyAction = new QAction(QIcon(":/pdfplugins/signatureplugin/sign-digitally.svg"), tr("Sign Digitally &With Certificate"), this);
@@ -216,6 +227,7 @@ void SignaturePlugin::setWidget(pdf::PDFWidget* widget)
     connect(initialPagesAction, &QAction::triggered, this, &SignaturePlugin::onInitialPages);
     connect(signContractAction, &QAction::triggered, this, &SignaturePlugin::onSignContract);
     connect(signPackAction, &QAction::triggered, this, &SignaturePlugin::onSignPack);
+    connect(verificationReportAction, &QAction::triggered, this, &SignaturePlugin::onVerificationReport);
     connect(m_widget, &pdf::PDFWidget::sceneActivityChanged, this, &SignaturePlugin::onSceneActivityChanged);
 
     updateActions();
@@ -244,6 +256,7 @@ std::vector<QAction*> SignaturePlugin::getActions() const
     result.push_back(m_actions[InitialPages]);
     result.push_back(m_actions[SignContract]);
     result.push_back(m_actions[SignPack]);
+    result.push_back(m_actions[VerificationReport]);
 
     return result;
 }
@@ -528,6 +541,7 @@ bool SignaturePlugin::onSignDigitally()
             // original bytes; encryption writes the document anew
             const QByteArray fingerprinted = parameters.encryptionUserPassword ? QByteArray() : parameters.originalDocumentData;
             stamp = pdf::PDFSignatureStamp::create(certificate->info, parameters.signingTime, parameters.certification, fingerprinted);
+            parameters.requireIncrementalUpdate = !stamp->documentSha256.isEmpty();
         }
 
         pdf::PDFSignatureFactory::TimestampSettings timestampSettings;
@@ -665,6 +679,13 @@ bool SignaturePlugin::onSignDigitally()
         try
         {
             signingResult = pdf::PDFDocumentSigner::sign(parameters, signedDocument);
+            if (signingResult == pdf::PDFDocumentSigner::Result::IncrementalUpdateFailed && stamp)
+            {
+                // The file is written anew, its old fingerprint could not be checked
+                stamp->documentSha256.clear();
+                parameters.requireIncrementalUpdate = false;
+                signingResult = pdf::PDFDocumentSigner::sign(parameters, signedDocument);
+            }
         }
         catch (const std::exception& exception)
         {
@@ -952,6 +973,69 @@ void SignaturePlugin::onSignContract()
     }
 }
 
+void SignaturePlugin::onVerificationReport()
+{
+    // The report is made of the saved file, as a third party receives it
+    const QString title = tr("Signature Verification Report");
+    const QString fileName = m_dataExchangeInterface->getOriginalFileName();
+    QFile file(fileName);
+    if (fileName.isEmpty() || !file.open(QFile::ReadOnly))
+    {
+        QMessageBox::information(m_widget, title, tr("The report is made of the saved file; save the document first."));
+        return;
+    }
+    const QByteArray data = file.readAll();
+    file.close();
+
+    const std::optional<QString> password = getOpenPassword(data);
+    if (!password)
+    {
+        return;
+    }
+
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    const pdf::PDFSignatureReport::Report report = pdf::PDFSignatureReport::create(data, fileName, *password);
+    const QString html = pdf::PDFSignatureReport::toHtml(report);
+    QApplication::restoreOverrideCursor();
+
+    QDialog dialog(m_dataExchangeInterface->getMainWindow());
+    dialog.setWindowTitle(title);
+    QVBoxLayout* layout = new QVBoxLayout(&dialog);
+    QTextBrowser* browser = new QTextBrowser(&dialog);
+    browser->setOpenLinks(false);
+    browser->setHtml(html);
+    layout->addWidget(browser);
+
+    QDialogButtonBox* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    QPushButton* savePdf = buttons->addButton(tr("Save as PDF..."), QDialogButtonBox::ActionRole);
+    QPushButton* saveHtml = buttons->addButton(tr("Save as HTML..."), QDialogButtonBox::ActionRole);
+    const QString baseName = QFileInfo(fileName).absolutePath() + "/" + QFileInfo(fileName).completeBaseName() + tr(" - signature report");
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(savePdf, &QPushButton::clicked, &dialog, [&]()
+    {
+        const QString target = QFileDialog::getSaveFileName(&dialog, tr("Save Report"), baseName + ".pdf", tr("Portable Document (*.pdf)"));
+        if (!target.isEmpty())
+        {
+            QPdfWriter writer(target);
+            writer.setPageSize(QPageSize(QPageSize::A4));
+            writer.setTitle(title);
+            browser->document()->print(&writer);
+        }
+    });
+    connect(saveHtml, &QPushButton::clicked, &dialog, [&]()
+    {
+        const QString target = QFileDialog::getSaveFileName(&dialog, tr("Save Report"), baseName + ".html", tr("Web page (*.html)"));
+        QFile output(target);
+        if (!target.isEmpty() && (!output.open(QFile::WriteOnly | QFile::Truncate) || output.write(html.toUtf8()) < 0))
+        {
+            QMessageBox::critical(&dialog, title, tr("The report cannot be saved."));
+        }
+    });
+    layout->addWidget(buttons);
+    dialog.resize(760, 820);
+    dialog.exec();
+}
+
 void SignaturePlugin::onSignPack()
 {
     Q_ASSERT(m_document);
@@ -1052,7 +1136,7 @@ void SignaturePlugin::onSignPack()
             if (filter.isEmpty() || line.label.contains(filter, Qt::CaseInsensitive) || line.fieldName.contains(filter, Qt::CaseInsensitive))
             {
                 placements.push_back({ line.pageIndex, line.rectangle });
-                signedLabels << tr("p. %1 \"%2\"").arg(line.pageIndex + 1).arg(line.label.left(40));
+                signedLabels << tr("p. %1 \"%2\"").arg(QString::number(line.pageIndex + 1), line.label.left(40));
             }
             else
             {
@@ -1067,8 +1151,15 @@ void SignaturePlugin::onSignPack()
             continue;
         }
 
+        // As in the contract flow: on a page turned by /Rotate the appearance would be
+        // drawn turned, so there the image goes into the page and the signature is invisible
         const pdf::PDFPageInitials::Placement lastPlacement = placements.back();
-        placements.pop_back();
+        const bool isLastOnRotatedPage = document->getCatalog()->getPage(lastPlacement.pageIndex)->getPageRotation() != pdf::PageRotation::None;
+        const size_t signedLineCount = placements.size();
+        if (!isLastOnRotatedPage)
+        {
+            placements.pop_back();
+        }
         if (!placements.empty())
         {
             if (pdf::PDFDocumentPointer drawn = pdf::PDFPageInitials::drawImages(document.data(), signature, placements))
@@ -1099,8 +1190,19 @@ void SignaturePlugin::onSignPack()
         const pdf::PDFPage* lastPage = document->getCatalog()->getPage(lastPlacement.pageIndex);
         const QRectF imageRectangle = pdf::PDFPageInitials::getDisplayToPageTransform(lastPage).mapRect(pdf::PDFPageInitials::getFittedDisplayRectangle(lastPage, lastPlacement.area, signature.size()));
         const QString fieldName = QString("andrepdf_signature_%1").arg(QDateTime::currentMSecsSinceEpoch());
-        parameters.createSignatureFieldFunction = pdf::PDFSignatureStamp::createVisibleSignatureField(document.data(), fieldName, lastPlacement.pageIndex, imageRectangle, signature,
-                                                                                                     pdf::PDFSignatureStamp::create(certificate->info, parameters.signingTime, parameters.certification, QByteArray()));
+        if (isLastOnRotatedPage)
+        {
+            const pdf::PDFObjectReference pageReference = lastPage->getPageReference();
+            parameters.createSignatureFieldFunction = [fieldName, pageReference](pdf::PDFDocumentBuilder& builder, pdf::PDFObjectReference signatureDictionary)
+            {
+                return builder.createSignatureField(fieldName, signatureDictionary, pageReference);
+            };
+        }
+        else
+        {
+            parameters.createSignatureFieldFunction = pdf::PDFSignatureStamp::createVisibleSignatureField(document.data(), fieldName, lastPlacement.pageIndex, imageRectangle, signature,
+                                                                                                         pdf::PDFSignatureStamp::create(certificate->info, parameters.signingTime, parameters.certification, QByteArray()));
+        }
 
         QByteArray signedDocument;
         timestampErrorMessage.clear();
@@ -1149,10 +1251,11 @@ void SignaturePlugin::onSignPack()
         const QString password = parameters.encryptionUserPassword.value_or(QString());
         const pdf::PDFDocumentSigner::SignedFileCheck check = extension ? pdf::PDFLongTermValidation::checkExtendedFile(written, signedBytes, fieldName, extension->timestampFieldName, password)
                                                                          : pdf::PDFDocumentSigner::checkSignedFile(written, fieldName, password);
+        // One arg() call: text from the document ("%4" in a label) is not substituted again
         report << tr("%1: %2 lines signed (%3), %4 left for another party, %5 - %6")
-                      .arg(part.name).arg(placements.size() + 1).arg(signedLabels.join(", ")).arg(otherLines)
-                      .arg(check.isOK() ? pdf::PDFSignatureStamp::getCertificationText(check.certification) : tr("CHECK FAILED"))
-                      .arg(QFileInfo(fileName).fileName());
+                      .arg(part.name, QString::number(signedLineCount), signedLabels.join(", "), QString::number(otherLines),
+                           check.isOK() ? pdf::PDFSignatureStamp::getCertificationText(check.certification) : tr("CHECK FAILED"),
+                           QFileInfo(fileName).fileName());
         if (extension)
         {
             for (const QString& line : extension->getReport())
@@ -1320,6 +1423,7 @@ void SignaturePlugin::updateActions()
         m_actions[InitialPages]->setEnabled(m_document && m_widget && !m_widget->isAnySceneActive(&m_scene));
         m_actions[SignContract]->setEnabled(m_document && m_widget && !m_widget->isAnySceneActive(&m_scene));
         m_actions[SignPack]->setEnabled(m_document && m_widget && !m_widget->isAnySceneActive(&m_scene));
+        m_actions[VerificationReport]->setEnabled(m_document);
         return;
     }
 
@@ -1340,6 +1444,7 @@ void SignaturePlugin::updateActions()
     m_actions[InitialPages]->setEnabled(m_document);
     m_actions[SignContract]->setEnabled(m_document);
     m_actions[SignPack]->setEnabled(m_document);
+    m_actions[VerificationReport]->setEnabled(m_document);
 
     // Clear action
     QAction* clearAction = m_actions[Clear];

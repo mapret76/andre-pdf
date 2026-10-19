@@ -501,6 +501,19 @@ PDFSignatureReport::Report PDFSignatureReport::create(const QByteArray& data, co
     return report;
 }
 
+PDFSignatureReport::Certificate PDFSignatureReport::describeCertificate(const QByteArray& certificateData)
+{
+    const unsigned char* pointer = reinterpret_cast<const unsigned char*>(certificateData.constData());
+    X509* certificate = d2i_X509(nullptr, &pointer, certificateData.size());
+    if (!certificate)
+    {
+        return Certificate();
+    }
+    Certificate result = PDFSignatureReportHelper::describe(certificate);
+    X509_free(certificate);
+    return result;
+}
+
 QString PDFSignatureReport::toHtml(const Report& report)
 {
     using Helper = PDFSignatureReportHelper;

@@ -34,7 +34,7 @@ namespace pdf
 
 bool PDFVersionHistory::isValidVersion(const QString& version)
 {
-    static const QRegularExpression expression(QStringLiteral("^\\d{1,5}(\\.\\d{1,5}){0,3}$"));
+    static const QRegularExpression expression(QRegularExpression::anchoredPattern(QStringLiteral("\\d{1,5}(\\.\\d{1,5}){0,3}")));
     return expression.match(version).hasMatch();
 }
 
@@ -61,6 +61,7 @@ PDFVersionHistory::Releases PDFVersionHistory::parse(const QString& markdown)
     static const QRegularExpression item(QStringLiteral("^[-*]\\s+(.+)$"));
 
     Releases releases;
+    bool isInValidRelease = false;  // lines under a heading of an invalid version belong to no release
     for (const QString& rawLine : markdown.split(QChar('\n')))
     {
         const QString line = rawLine.trimmed();
@@ -69,13 +70,14 @@ PDFVersionHistory::Releases PDFVersionHistory::parse(const QString& markdown)
             Release release;
             release.version = match.captured(1);
             release.date = QDate::fromString(match.captured(2), Qt::ISODate);
-            if (isValidVersion(release.version))
+            isInValidRelease = isValidVersion(release.version);
+            if (isInValidRelease)
             {
                 releases.push_back(release);
             }
             continue;
         }
-        if (releases.empty())
+        if (releases.empty() || !isInValidRelease)
         {
             continue;
         }
@@ -115,6 +117,29 @@ QString PDFVersionHistory::getEmbeddedHistory()
     return QString::fromUtf8(file.readAll());
 }
 
+QString PDFVersionHistory::escapeMarkdown(const QString& text)
+{
+    // Text of the changelog or of the manifest is shown as written: every ASCII
+    // punctuation character is escaped (CommonMark), line breaks become spaces
+    QString result;
+    result.reserve(text.size() * 2);
+    for (const QChar character : text)
+    {
+        if (character == QChar('\n') || character == QChar('\r'))
+        {
+            result += QChar(' ');
+            continue;
+        }
+        const char16_t code = character.unicode();
+        if (code < 128 && (character.isPunct() || character.isSymbol()))
+        {
+            result += QChar('\\');
+        }
+        result += character;
+    }
+    return result;
+}
+
 QString PDFVersionHistory::toMarkdown(const Releases& releases)
 {
     QString markdown;
@@ -123,11 +148,11 @@ QString PDFVersionHistory::toMarkdown(const Releases& releases)
         markdown += QStringLiteral("## %1%2\n\n").arg(release.version, release.date.isValid() ? QStringLiteral(" - ") + release.date.toString(Qt::ISODate) : QString());
         if (!release.summary.isEmpty())
         {
-            markdown += QStringLiteral("**%1**\n\n").arg(release.summary);
+            markdown += QStringLiteral("**%1**\n\n").arg(escapeMarkdown(release.summary));
         }
         for (const QString& change : release.changes)
         {
-            markdown += QStringLiteral("- %1\n").arg(change);
+            markdown += QStringLiteral("- %1\n").arg(escapeMarkdown(change));
         }
         markdown += QStringLiteral("\n");
     }

@@ -139,6 +139,32 @@ Acceptance test for anything signing: free **Acrobat Reader** shows the signatur
 valid/certified with the chosen permission, and an edit made afterwards in another
 tool is reported as a violation.
 
+**Since queue B (2026-10-19):** signatures are PAdES (`ETSI.CAdES.detached`,
+signing-certificate-v2, no signing-time). `PDFLongTermValidation` appends the DSS
+(certificates + OCSP/CRL, each checked against its issuer) and a document timestamp
+(B-LTA); `checkExtendedFile` checks a saved file that must *begin with* the signed bytes.
+`PDFSignatureReport` is the third-party report (Signature menu -> Signature Verification
+Report). After certification "no changes" (P=1) only a document timestamp may follow
+(`Result::DocumentLockedNoChanges`). A stamp with the file fingerprint requires an
+incremental update (`requireIncrementalUpdate`). Tests: `UnitTestsLongTermValidation`
+runs a loopback CA with OCSP, CRL and CA-issuers endpoints.
+
+## §4a Versions, updates and releases
+
+- Version: `ANDRE_PDF_VERSION` in the root `CMakeLists.txt`; history `CHANGELOG.md`
+  (`## x.y.z - YYYY-MM-DD`, `Summary:` line, `- ` changes), embedded and shown in Help.
+  **Every release needs its CHANGELOG entry**, or the release tool refuses it.
+- Updates: signed manifest (ECDSA P-256) from `releases/latest/download`, public key
+  `Pdf4QtLibCore/andre-pdf-release-key.pub.pem`, **private key only in
+  `~/.config/andre-pdf/release-signing-key.pem` on andre-vault (mode 600)** — never commit,
+  never paste; Andre should keep an offline backup.
+- Release (on andre-vault): run `Windows_MSI` on master, then
+  `tools/andre-release.sh <run id>`; it checks master/version/changelog, signs, verifies,
+  shows the summary and publishes only after **Andre types "yes"**.
+- Every task gets an independent review (fresh-context agent, frozen worktree
+  `~/projects/andre-pdf-review`, Debug tree `build-review`); reports and fix tables live in
+  `docs/andre/reviews/` (R0, R0-verification, B45, R1-fixes, ...).
+
 ## §5 Roadmap (one developer + Claude)
 
 | Phase | Scope | Effort | Gate |

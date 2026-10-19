@@ -36,6 +36,7 @@
 #include "pdfpage.h"
 
 #include <QRegularExpression>
+#include <QSet>
 
 #include <algorithm>
 
@@ -52,33 +53,48 @@ bool PDFSignatureLineFinder::isSignatureLabel(const QString& text)
     constexpr QRegularExpression::PatternOptions options = QRegularExpression::CaseInsensitiveOption | QRegularExpression::UseUnicodePropertiesOption;
 
     // The attestation clause "Signed at ___ on this ___ day of ___" has lines for the
-    // place and the date, not for a signature
-    static const QRegularExpression attestation(QStringLiteral("\\b(sign(ed)?|geteken|onderteken)\\s+(at|on|this|te|op)\\b|\\bday\\s+of\\b|\\bdag\\s+van\\b|\\bon\\s+this\\b"), options);
-    // These name the signature itself, also next to a date ("Signature & Date")
+    // place and the date, not for a signature; "Signed on behalf of" is a signature line
+    static const QRegularExpression attestation(QStringLiteral("\\b(sign(ed)?|geteken|onderteken)\\s+(at|this|te|op)\\b|\\bsign(ed)?\\s+on\\s+(?!behalf)|"
+                                                               "\\bday\\s+of\\b|\\bdag\\s+van\\b|\\bon\\s+this\\b"), options);
+    // These name the signature itself
     static const QRegularExpression explicitSignature(QStringLiteral("\\b(signature|handtekening|initials?|paraaf|parafeer)\\b"), options);
+    // A signature paired with another field on one line ("Signature & Date", "Name and Signature")
+    static const QRegularExpression paired(QStringLiteral("\\b(signature|handtekening|initials?|paraaf)\\s*(&|and|en|/|,|\\+)|(&|\\band|\\ben|/|,|\\+)\\s*(signature|handtekening|initials?|paraaf)\\b"), options);
     // Lines for the name, the date or the place of the signing are not signed on,
-    // even when the label mentions the signatory ("Name of signatory")
-    static const QRegularExpression other(QStringLiteral("\\b(name|naam|date|datum|place|plek|capacity|hoedanigheid|id|identity|identiteit|address|adres|print|full names|volle name)\\b"), options);
+    // even when the label mentions the signature ("Date of signature", "Name of signatory")
+    static const QRegularExpression other(QStringLiteral("\\b(name|naam|surname|date|datum|place|plek|capacity|hoedanigheid|id|identity|identiteit|address|adres|print|full names|volle name)\\b"), options);
+    // The name written as initials and surname is a name line
+    static const QRegularExpression nameLine(QStringLiteral("\\binitials\\s*(and|&)\\s*surname\\b|\\bsurname\\s*(and|&)\\s*initials\\b|\\bvoorletters\\b"), options);
     static const QRegularExpression signature(QStringLiteral("(sign|geteken|witness|getuie|onderteken)|\\bon\\s+behalf\\s+of\\b|\\bnamens\\b|"
                                                              "\\bfor\\s+the\\s+(purchaser|seller|buyer|lessor|lessee|landlord|tenant|company|employer|employee|contractor|client|owner|borrower|lender|surety)\\b|"
                                                              "\\bvir\\s+die\\s+(koper|verkoper|verhuurder|huurder|maatskappy|werkgewer|werknemer|eienaar)\\b"), options);
 
-    if (attestation.match(text).hasMatch())
+    if (attestation.match(text).hasMatch() || nameLine.match(text).hasMatch())
     {
         return false;
     }
+    const bool isOther = other.match(text).hasMatch();
     if (explicitSignature.match(text).hasMatch())
     {
-        return true;
+        return !isOther || paired.match(text).hasMatch();
     }
-    return !other.match(text).hasMatch() && signature.match(text).hasMatch();
+    return !isOther && signature.match(text).hasMatch();
 }
 
 PDFDocumentPointer PDFSignatureLineFinder::addSignatureFields(const PDFDocument* document, const std::vector<SignatureLine>& lines, const QString& namePrefix)
 {
     PDFDocumentModifier modifier(document);
     PDFDocumentBuilder* builder = modifier.getBuilder();
+
+    // Names already in the form are not used again (fields of one name are one field)
+    QSet<QString> names;
+    PDFForm::parse(document, document->getCatalog()->getFormObject()).apply([&names](const PDFFormField* field)
+    {
+        names.insert(field->getName(PDFFormField::NameType::FullyQualified));
+    });
+
     int count = 0;
+    int number = 0;
     for (const SignatureLine& line : lines)
     {
         const PDFPage* page = document->getCatalog()->getPage(line.pageIndex);
@@ -88,7 +104,13 @@ PDFDocumentPointer PDFSignatureLineFinder::addSignatureFields(const PDFDocument*
         }
 
         ++count;
-        const PDFObjectReference field = builder->createSignatureField(QString("%1%2").arg(namePrefix).arg(count), PDFObjectReference(), page->getPageReference());
+        QString name;
+        do
+        {
+            name = namePrefix + QString::number(++number);
+        } while (names.contains(name));
+        names.insert(name);
+        const PDFObjectReference field = builder->createSignatureField(name, PDFObjectReference(), page->getPageReference());
         PDFObjectFactory factory;
         factory.beginDictionary();
         factory.beginDictionaryItem("Rect");

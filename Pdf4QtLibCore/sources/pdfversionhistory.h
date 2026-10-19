@@ -57,6 +57,9 @@ public:
     /// negative number when a is older, zero when equal, positive when a is newer
     static int compare(const QString& a, const QString& b);
 
+    /// Escapes the text for Markdown, so it is shown as written (no markup, no HTML)
+    static QString escapeMarkdown(const QString& text);
+
     /// Returns true, if the text is a version of numbers separated by dots
     static bool isValidVersion(const QString& version);
 

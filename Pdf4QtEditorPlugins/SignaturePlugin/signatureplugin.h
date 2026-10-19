@@ -71,6 +71,7 @@ private:
     void onInitialPages();
     void onSignContract();
     void onSignPack();
+    void onVerificationReport();
 
     void onPenChanged(const QPen& pen);
     void onBrushChanged(const QBrush& brush);
@@ -110,6 +111,7 @@ private:
         SignElectronically,
         SignDigitally,
         Certificates,
+        VerificationReport,
 
         LastAction
     };

@@ -148,11 +148,22 @@ bool PDFSignatureLibrary::save(const QString& fileName, QString* errorMessage) c
 {
     QDir().mkpath(QFileInfo(fileName).absolutePath());
 
+    // On Windows only the encrypted form can be read back, so nothing else is written
+    const QByteArray data = protect(serialize());
+    if (data.isEmpty())
+    {
+        if (errorMessage)
+        {
+            *errorMessage = tr("The signature library %1 cannot be encrypted for your Windows account, it was not saved.").arg(QDir::toNativeSeparators(fileName));
+        }
+        return false;
+    }
+
     QSaveFile file(fileName);
     if (file.open(QFile::WriteOnly))
     {
         file.setPermissions(QFile::ReadOwner | QFile::WriteOwner);
-        file.write(protect(serialize()));
+        file.write(data);
         if (file.commit())
         {
             return true;
@@ -179,11 +190,13 @@ QByteArray PDFSignatureLibrary::protect(const QByteArray& data)
         LocalFree(output.pbData);
         return result;
     }
-#endif
+    return QByteArray();
+#else
     // ponytail: outside Windows the library relies on the file permissions of the
     // user profile; use the system keyring (libsecret, Android Keystore) if it has to
     // withstand a copied file.
     return QByteArray(PROTECTED_PLAIN_MARK) + data;
+#endif
 }
 
 std::optional<QByteArray> PDFSignatureLibrary::unprotect(const QByteArray& data)

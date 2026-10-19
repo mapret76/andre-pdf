@@ -26,6 +26,7 @@
 #include <QSettings>
 #include <QVBoxLayout>
 #include <QTextBrowser>
+#include <QTextDocument>
 #include <QApplication>
 #include <QDialogButtonBox>
 
@@ -45,7 +46,7 @@ PDFVersionHistoryDialog::PDFVersionHistoryDialog(QWidget* parent, const QString&
         markdown += introduction + QStringLiteral("\n\n");
     }
     markdown += pdf::PDFVersionHistory::toMarkdown(releases);
-    m_browser->setMarkdown(markdown);
+    m_browser->document()->setMarkdown(markdown, QTextDocument::MarkdownFeatures(QTextDocument::MarkdownDialectGitHub | QTextDocument::MarkdownNoHTML));
     layout->addWidget(m_browser);
 
     QDialogButtonBox* buttonBox = new QDialogButtonBox(QDialogButtonBox::Close, this);

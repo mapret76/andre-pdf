@@ -85,7 +85,7 @@ public:
 
     /// Encrypts data for the current user account (DPAPI on Windows). On the other
     /// systems the data are only marked, the file permissions protect them.
-    static QByteArray protect(const QByteArray& data);
+    static QByteArray protect(const QByteArray& data);   ///< Empty when the data cannot be protected
 
     /// Reverses protect(), returns nothing when the data cannot be decrypted
     static std::optional<QByteArray> unprotect(const QByteArray& data);

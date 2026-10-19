@@ -52,12 +52,14 @@ Queue B (Andre, 2026-10-19: "digital signing compliant with South African law ..
 a third party to confirm the ID of the certificate and author"; "version control ... check for
 new versions, download and install when the user agrees ... summary of what changes ... full
 version history"; "an independent reviewer after every task ... functionality and security"):
-- [ ] R0 Independent review of A1-A16 (two reviewers, fresh context), findings fixed
-- [ ] B1 PAdES signatures: ETSI.CAdES.detached with signing-certificate-v2, timestamp by default, LTV (DSS: chain, OCSP/CRL), document timestamp
-- [ ] B2 "Verify Signatures" report for third parties: signer identity (subject, issuer, serial, fingerprints), chain, revocation, integrity, lock, AES (accredited) or ordinary electronic signature
-- [ ] B3 Stamp and QR carry issuer and serial of the certificate
-- [ ] B4 Versions: Andre PDF version number, CHANGELOG.md, Help -> Version History, "What's new" after an update
-- [ ] B5 Updates: check (start-up + Help), summary of every newer version, download, verify the signed manifest (ECDSA P-256, key in a vault file per Andre) and SHA-256, install on consent; release script
+- [x] R0 Independent review of A1-A16 (two reviewers, fresh context), findings fixed; fixes verified (R0-verification.md), its findings fixed (R1-fixes.md)
+- [~] B1 PAdES signatures: ETSI.CAdES.detached with signing-certificate-v2, timestamp by default, LTV (DSS: chain, OCSP/CRL), document timestamp (built, review R2 pending)
+- [~] B2 "Verify Signatures" report for third parties: signer identity (subject, issuer, serial, fingerprints), chain, revocation, integrity, lock, AES (accredited) or ordinary electronic signature (built, review R2 pending)
+- [~] B3 Stamp and QR carry issuer and serial of the certificate (built, review R2 pending)
+- [x] B4 Versions: Andre PDF version number, CHANGELOG.md, Help -> Version History, "What's new" after an update (reviewed: B45-review.md, fixed: R1-fixes.md)
+- [x] B5 Updates: check (start-up + Help), summary of every newer version, download, verify the signed manifest (ECDSA P-256, key in a vault file per Andre) and SHA-256, install on consent; release script (reviewed: B45-review.md, fixed: R1-fixes.md)
+- [ ] R2 Independent review of B1-B3 and of the R1 fixes, findings fixed
+- [ ] B6 First release v1.0.0: Windows_MSI on master, then `tools/andre-release.sh <run>` on andre-vault (Andre types "yes")
 Every task of queue B gets an independent review before it is ticked (`docs/andre/reviews/`).
 
 Waiting on Andre:
@@ -529,3 +531,28 @@ upstream author's machine, not ours).
   upload). Tests `UnitTestsUpdate` (7) incl. interop with the release tools.
 - **Back up the release key offline**: without it no update can be signed (users would
   have to install the next version by hand).
+
+### 2026-10-19 - B1-B3 built; R0 verification and B4/B5 review fixed
+- Reviews: R0 verification (21 of 30 R0 fixes complete, 9 partly; new N1-N9) and the
+  B4/B5 review (H1, M1-M4, L1-L14), both by independent reviewers with a fresh context.
+  Every finding and what was done: `docs/andre/reviews/R1-fixes.md`. Notable: a document
+  certified "No changes" refuses further signatures (N3); editing a scan with another
+  program's OCR removes only the words edited (N2); the release script could not have
+  published at all (H1) and now signs only master builds of a newer version after "yes" (M4);
+  changelog text is shown as written (M1); the installer is re-hashed under a deny-write
+  handle right before msiexec (M2, rest needs an Authenticode certificate); downloads can
+  be cancelled (M3).
+- B1: CAdES signatures (`ETSI.CAdES.detached`, signing-certificate-v2, no signing-time;
+  OpenSSL `CMS_CADES | CMS_NO_SIGNING_TIME`, on Windows the attribute via CryptSignMessage
+  and the whole chain in the signature). `PDFLongTermValidation`: DSS of an incremental
+  update with the certificates of all signatures and timestamps, OCSP answers or CRLs
+  verified against the issuer, issuers fetched from "CA issuers"; then a document
+  timestamp (B-LTA). Sign dialog: "Signature with timestamp" and long-term validation by
+  default; also in the pack flow. The saved file must begin with the signed bytes.
+  Tests: `UnitTestsLongTermValidation` (loopback CA: OCSP, CRL fallback, fetched issuer,
+  revoked, foreign OCSP signer, existing store kept, encrypted), timestamp test B-LTA.
+- B2: `PDFSignatureReport` (identity, chain, embedded revocation, integrity, timestamps,
+  PAdES level, lock, ECT Act status; HTML with every value escaped) and Signature ->
+  Signature Verification Report... (save as PDF or HTML). User guide: how a third party
+  confirms the signer in Acrobat Reader; ECT Act s13, s37-38, s4(4) Schedule 2.
+- B3: stamp text and QR carry the issuer and the serial number of the certificate.

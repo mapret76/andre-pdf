@@ -86,6 +86,13 @@ PDFDocumentSigner::Result PDFDocumentSigner::sign(const Parameters& parameters, 
     {
         return Result::CertificationNotFirst;
     }
+    // Andre PDF: after a certification "no changes" only a document timestamp may be
+    // added (ISO 32000-2, 12.8.2.2.2); an approval signature would break the certification
+    if (parameters.signatureDictionaryType != DOCUMENT_TIMESTAMP_TYPE &&
+        PDFOCRApplyProcessor::getCertificationPermissions(parameters.document) == PDFOCRApplyProcessor::CertificationPermissions::NoChanges)
+    {
+        return Result::DocumentLockedNoChanges;
+    }
     if (preserveExistingSignatures && parameters.originalDocumentData.isEmpty())
     {
         return Result::ExistingSignaturesNotPreserved;
@@ -240,6 +247,10 @@ PDFDocumentSigner::Result PDFDocumentSigner::signAttempt(const Parameters& param
         if (!isWritten && preserveExistingSignatures)
         {
             return Result::ExistingSignaturesNotPreserved;
+        }
+        if (!isWritten && parameters.requireIncrementalUpdate)
+        {
+            return Result::IncrementalUpdateFailed;
         }
     }
 
@@ -566,6 +577,12 @@ QString PDFDocumentSigner::getResultMessage(Result result)
 
         case Result::CertificationNotFirst:
             return tr("The document can be certified only by its first signature, but it is already signed.");
+
+        case Result::IncrementalUpdateFailed:
+            return tr("The signature could not be appended to the original file.");
+
+        case Result::DocumentLockedNoChanges:
+            return tr("The document is certified \"no changes allowed\": another signature would break the certification, so the document was not signed.");
 
         default:
             Q_ASSERT(false);

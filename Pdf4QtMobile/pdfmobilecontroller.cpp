@@ -288,14 +288,32 @@ bool PDFMobileController::sign(const QUrl& certificateUrl, const QString& passwo
     const pdf::PDFCertificateEntry entry = *certificate;
     parameters.signFunction = [entry, password](const QByteArray& data, QByteArray& result) { return pdf::PDFSignatureFactory::sign(entry, password, data, result); };
     const QString fieldName = QString("andrepdf_signature_%1").arg(QDateTime::currentMSecsSinceEpoch());
-    parameters.createSignatureFieldFunction = pdf::PDFSignatureStamp::createVisibleSignatureField(&document, fieldName, last.pageIndex, imageRectangle, signature,
-                                                                                                 pdf::PDFSignatureStamp::create(entry.info, parameters.signingTime, parameters.certification, m_documentData));
+    pdf::PDFSignatureStamp::Data stamp = pdf::PDFSignatureStamp::create(entry.info, parameters.signingTime, parameters.certification, m_documentData);
+    parameters.requireIncrementalUpdate = !stamp.documentSha256.isEmpty();
 
     QByteArray signedDocument;
-    const pdf::PDFDocumentSigner::Result result = pdf::PDFDocumentSigner::sign(parameters, signedDocument);
+    pdf::PDFDocumentSigner::Result result = pdf::PDFDocumentSigner::Result::SigningFailed;
+    QString exceptionMessage;
+    try
+    {
+        parameters.createSignatureFieldFunction = pdf::PDFSignatureStamp::createVisibleSignatureField(&document, fieldName, last.pageIndex, imageRectangle, signature, stamp);
+        result = pdf::PDFDocumentSigner::sign(parameters, signedDocument);
+        if (result == pdf::PDFDocumentSigner::Result::IncrementalUpdateFailed)
+        {
+            // The file is written anew, its old fingerprint could not be checked
+            stamp.documentSha256.clear();
+            parameters.requireIncrementalUpdate = false;
+            parameters.createSignatureFieldFunction = pdf::PDFSignatureStamp::createVisibleSignatureField(&document, fieldName, last.pageIndex, imageRectangle, signature, stamp);
+            result = pdf::PDFDocumentSigner::sign(parameters, signedDocument);
+        }
+    }
+    catch (const std::exception& exception)
+    {
+        exceptionMessage = QString::fromLocal8Bit(exception.what());
+    }
     if (result != pdf::PDFDocumentSigner::Result::OK)
     {
-        setStatus(pdf::PDFDocumentSigner::getResultMessage(result));
+        setStatus(!exceptionMessage.isEmpty() ? tr("The document could not be signed: %1").arg(exceptionMessage) : pdf::PDFDocumentSigner::getResultMessage(result));
         return false;
     }
 

@@ -40,6 +40,8 @@
 #include <QPainter>
 #include <QFontMetricsF>
 
+#include <memory>
+
 #include "pdfdbgheap.h"
 
 namespace pdf
@@ -171,6 +173,7 @@ PDFDocumentPointer PDFScanTextEditor::removeInvisibleText(const PDFDocument* doc
     // Only a scan (images and invisible text) is written again; anything else could
     // change its look by the rewrite
     std::vector<const PDFEditedPageContentElement*> kept;
+    std::vector<std::unique_ptr<PDFEditedPageContentElement>> reducedElements;
     bool isRemoved = false;
     for (size_t i = 0; i < content.getElementCount(); ++i)
     {
@@ -190,17 +193,23 @@ PDFDocumentPointer PDFScanTextEditor::removeInvisibleText(const PDFDocument* doc
         // before it (render mode, font, text matrix). Invisible text draws nothing, so it
         // has no outline: its place is estimated from the text matrix and the font size.
         // ponytail: half an em per character for the width; enough for OCR words and lines
+        // Only the text items in the area are removed; a page of another program's OCR
+        // is often one text object, whose other lines must stay
         PDFPageContentProcessorState current = text->getState();
-        QRectF box = text->getBoundingBox();
+        std::vector<PDFEditedPageContentElementText::Item> items;
+        bool isItemRemoved = false;
+        bool hasText = false;
         for (const PDFEditedPageContentElementText::Item& item : text->getItems())
         {
             if (item.isUpdateGraphicState)
             {
                 current = item.state;
+                items.push_back(item);
                 continue;
             }
             if (!item.isText)
             {
+                items.push_back(item);
                 continue;
             }
             if (current.getTextRenderingMode() != TextRenderingMode::Invisible)
@@ -210,16 +219,33 @@ PDFDocumentPointer PDFScanTextEditor::removeInvisibleText(const PDFDocument* doc
             const QTransform matrix = current.getTextMatrix() * current.getCurrentTransformationMatrix();
             const qreal size = current.getTextFontSize();
             const qreal width = 0.5 * size * qMax<qsizetype>(1, qsizetype(item.textSequence.items.size())) * current.getTextHorizontalScaling() / 100.0;
-            box = box.united(matrix.mapRect(QRectF(0, -0.2 * size, width, size)));
+            if (matrix.mapRect(QRectF(0, -0.2 * size, width, size)).intersects(area))
+            {
+                isItemRemoved = true;
+            }
+            else
+            {
+                hasText = true;
+                items.push_back(item);
+            }
         }
-        if (box.intersects(area))
-        {
-            isRemoved = true;
-        }
-        else
+
+        if (!isItemRemoved)
         {
             kept.push_back(element);
         }
+        else if (hasText)
+        {
+            std::unique_ptr<PDFEditedPageContentElementText> reduced(text->clone());
+            reduced->setItems(items);
+            // The content is written from the text form of the items
+            PDFEditedPageContentElementText* reducedText = reduced.get();
+            reduced->setItemsAsText(PDFEditedPageContentElementText::createItemsAsText(reduced->getState(), items,
+                                                                                    [reducedText](const PDFFont* font) { return reducedText->getFontResourceKey(font); }));
+            kept.push_back(reduced.get());
+            reducedElements.push_back(std::move(reduced));
+        }
+        isRemoved = isRemoved || isItemRemoved;
     }
     if (!isRemoved)
     {

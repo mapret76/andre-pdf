@@ -119,6 +119,9 @@ public:
     /// \param useSystemCertificateStore Trust the roots of the system (Windows) store
     static Report create(const QByteArray& data, const QString& fileName, const QString& password, bool useSystemCertificateStore = true);
 
+    /// Describes a DER encoded certificate (an empty description when it cannot be read)
+    static Certificate describeCertificate(const QByteArray& certificateData);
+
     /// Report as a self-contained HTML document (every value is escaped)
     static QString toHtml(const Report& report);
 

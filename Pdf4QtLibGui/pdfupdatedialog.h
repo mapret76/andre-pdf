@@ -46,7 +46,7 @@ public:
         Skip
     };
 
-    explicit PDFUpdateDialog(QWidget* parent, const pdf::PDFUpdateChecker::Update& update, const QString& currentVersion);
+    explicit PDFUpdateDialog(QWidget* parent, const pdf::PDFUpdateChecker::Update& update, const QString& currentVersion, bool isAutomatic = false);
 
     Choice getChoice() const { return m_choice; }
 

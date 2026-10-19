@@ -131,10 +131,17 @@ void MobileTest::openSignAndCheck()
     const QByteArray signedBytes = signedData.readAll();
     QVERIFY(signedBytes.startsWith(QByteArray("%PDF")));
 
-    // The signed file opened again: signed, so only an approval signature (tap) is possible
+    // The signed file opened again: certified "no changes", so no further signature is allowed
     QVERIFY(controller.open(QUrl::fromLocalFile(signedFile)));
-    QVERIFY2(controller.sign(QUrl::fromLocalFile(info.fileName), info.privateKeyPasword, 1, 0, 0, 0.5, 0.9), qPrintable(controller.getStatus()));
-    QVERIFY(!controller.sign(QUrl::fromLocalFile(info.fileName), QStringLiteral("wrong"), 1, 0, 0, 0.5, 0.9));
+    QVERIFY(!controller.sign(QUrl::fromLocalFile(info.fileName), info.privateKeyPasword, 0, 0, 0, 0.5, 0.9));
+    QVERIFY(controller.getStatus().contains(QStringLiteral("no changes")));
+
+    // Certified "form filling and signing": another party countersigns (tap); a wrong password fails
+    QVERIFY(controller.open(QUrl::fromLocalFile(documentFile)));
+    QVERIFY2(controller.sign(QUrl::fromLocalFile(info.fileName), info.privateKeyPasword, 2, 0, -1, 0, 0), qPrintable(controller.getStatus()));
+    QVERIFY(controller.open(controller.getSignedFileUrl()));
+    QVERIFY2(controller.sign(QUrl::fromLocalFile(info.fileName), info.privateKeyPasword, 0, 0, 0, 0.5, 0.9), qPrintable(controller.getStatus()));
+    QVERIFY(!controller.sign(QUrl::fromLocalFile(info.fileName), QStringLiteral("wrong"), 0, 0, 0, 0.5, 0.9));
 }
 
 QTEST_MAIN(MobileTest)

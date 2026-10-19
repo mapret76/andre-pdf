@@ -26,11 +26,13 @@
 #include "pdfdocument.h"
 #include "pdfdocumentbuilder.h"
 #include "pdfpage.h"
+#include "pdfsignaturereport.h"
 
 #include <QFont>
 #include <QPainter>
 #include <QPainterPath>
 #include <QCryptographicHash>
+#include <QRegularExpression>
 
 #include "pdfdbgheap.h"
 
@@ -58,6 +60,21 @@ PDFSignatureStamp::Data PDFSignatureStamp::create(const PDFCertificateInfo& cert
     data.signingTime = signingTime;
     data.certification = certification;
     data.certificateSha256 = QCryptographicHash::hash(certificate.getCertificateData(), QCryptographicHash::Sha256);
+
+    // Issuer and serial number name the certificate, so a third party can ask the issuer
+    // about it (or find it in its directory)
+    auto clean = [](QString text) { text.removeIf([](QChar c) { return c.category() == QChar::Other_Control || c.category() == QChar::Other_Format; }); return text; };
+    const PDFSignatureReport::Certificate description = PDFSignatureReport::describeCertificate(certificate.getCertificateData());
+    data.issuer = clean(description.issuer);
+    data.serialNumber = clean(description.serialNumber);
+    static const QRegularExpression commonName(QStringLiteral("(?:^|,)CN=((?:\\\\.|[^,])+)"));
+    static const QRegularExpression organization(QStringLiteral("(?:^|,)O=((?:\\\\.|[^,])+)"));
+    QRegularExpressionMatch match = commonName.match(data.issuer);
+    if (!match.hasMatch())
+    {
+        match = organization.match(data.issuer);
+    }
+    data.issuerName = match.hasMatch() ? match.captured(1) : data.issuer;
     if (!originalDocumentData.isEmpty())
     {
         data.documentSha256 = QCryptographicHash::hash(originalDocumentData, QCryptographicHash::Sha256);
@@ -89,6 +106,14 @@ QString PDFSignatureStamp::getPayload(const Data& data)
             break;
     }
     lines << QStringLiteral("Certificate SHA-256: %1").arg(QString::fromLatin1(data.certificateSha256.toHex().toUpper()));
+    if (!data.serialNumber.isEmpty())
+    {
+        lines << QStringLiteral("Certificate serial: %1").arg(data.serialNumber);
+    }
+    if (!data.issuer.isEmpty())
+    {
+        lines << QStringLiteral("Issuer: %1").arg(data.issuer);
+    }
     if (!data.documentSha256.isEmpty())
     {
         lines << QStringLiteral("File before signing SHA-256: %1").arg(QString::fromLatin1(data.documentSha256.toHex().toUpper()));
@@ -123,6 +148,10 @@ QStringList PDFSignatureStamp::getTextLines(const Data& data)
         lines << certificationText;
     }
     lines << tr("Certificate %1").arg(formatFingerprint(data.certificateSha256, 8));
+    if (!data.issuerName.isEmpty())
+    {
+        lines << tr("Issued by %1, serial %2").arg(data.issuerName.left(40), data.serialNumber.left(24));
+    }
     if (!data.documentSha256.isEmpty())
     {
         lines << tr("File before signing %1").arg(formatFingerprint(data.documentSha256, 8));

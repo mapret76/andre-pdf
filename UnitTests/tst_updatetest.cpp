@@ -23,6 +23,8 @@
 #include "pdfupdatechecker.h"
 #include "pdfversionhistory.h"
 
+#include <QTextDocument>
+#include <atomic>
 #include <QtTest>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -153,6 +155,38 @@ void UpdateTest::manifestRules()
     QByteArray noSummary = manifest("1.2.0", url, installer);
     noSummary.replace("{\"version\":\"1.2.0\",\"date\"", "{\"version\":\"1.1.9\",\"date\"");
     QVERIFY(!PDFUpdateChecker::parseManifest(noSummary, "1.0.0", "windows", &errorMessage));   // newest version without its entry
+
+    // Review B45 L3: strict fields - a version with a line break, a fractional size,
+    // non-hex characters in the SHA-256, a URL with user name or port
+    QVERIFY(!PDFVersionHistory::isValidVersion(QStringLiteral("1.0.0\n")));
+    QByteArray fractional = manifest("1.1.0", url, installer);
+    fractional.replace("\"size\":2048", "\"size\":2048.5");
+    QVERIFY(fractional.contains("2048.5"));
+    QVERIFY(!PDFUpdateChecker::parseManifest(fractional, "1.0.0", "windows", &errorMessage));
+    QByteArray badHash = manifest("1.1.0", url, installer);
+    badHash.replace("\"sha256\":\"", "\"sha256\":\"zz");
+    QVERIFY(!PDFUpdateChecker::parseManifest(badHash, "1.0.0", "windows", &errorMessage));
+    QVERIFY(!PDFUpdateChecker::parseManifest(manifest("1.1.0", "https://x@github.com/a.msi", installer), "1.0.0", "windows", &errorMessage));
+    QVERIFY(!PDFUpdateChecker::parseManifest(manifest("1.1.0", "https://github.com:4444/a.msi", installer), "1.0.0", "windows", &errorMessage));
+
+    // Review B45 M1: changelog text is shown as written, no markup or HTML
+    PDFVersionHistory::Release release;
+    release.version = QStringLiteral("1.2.0");
+    release.summary = QStringLiteral("Press <Enter> to sign; files <5 MB\n## 99.0.0");
+    release.changes << QStringLiteral("A list <!-- hidden") << QStringLiteral("*bold* [link](http://x)");
+    const QString markdown = PDFVersionHistory::toMarkdown({ release });
+    QVERIFY(!markdown.contains(QStringLiteral("<Enter>")));
+    QVERIFY(!markdown.contains(QStringLiteral("\n## 99")));
+    QTextDocument document;
+    document.setMarkdown(markdown, QTextDocument::MarkdownFeatures(QTextDocument::MarkdownDialectGitHub | QTextDocument::MarkdownNoHTML));
+    const QString shown = document.toPlainText();
+    QVERIFY2(shown.contains(QStringLiteral("Press <Enter> to sign; files <5 MB ## 99.0.0")), qPrintable(shown));
+    QVERIFY2(shown.contains(QStringLiteral("A list <!-- hidden")) && shown.contains(QStringLiteral("*bold* [link](http://x)")), qPrintable(shown));
+
+    // A heading of an invalid version takes no lines from the release before it
+    const PDFVersionHistory::Releases parsed = PDFVersionHistory::parse(QStringLiteral("## 1.1.0 - 2026-11-01\nSummary: One.\n- a\n## 1.2.3.4.5 - 2026-12-01\nSummary: Bad.\n- b\n"));
+    QCOMPARE(parsed.size(), size_t(1));
+    QCOMPARE(parsed.front().changes, QStringList{ QStringLiteral("a") });
 }
 
 void UpdateTest::checkAndDownload()
@@ -197,17 +231,37 @@ void UpdateTest::checkAndDownload()
     qint64 lastProgress = 0;
     const QString file = PDFUpdateChecker::download(*update, directory.path(), [&lastProgress](qint64 received, qint64) { lastProgress = received; }, &errorMessage);
     QVERIFY2(!file.isEmpty(), qPrintable(errorMessage));
-    QCOMPARE(QFileInfo(file).fileName(), QStringLiteral("AndrePDF_1.1.0") + (PDFUpdateChecker::getPlatform() == "windows" ? ".msi" : ".bin"));
+    QVERIFY(QFileInfo(file).fileName().startsWith(QStringLiteral("AndrePDF_1.1.0_")));
+    QVERIFY(QFileInfo(file).fileName().endsWith(PDFUpdateChecker::getPlatform() == "windows" ? ".msi" : ".bin"));
     QCOMPARE(QFileInfo(file).size(), qint64(installer.size()));
     QCOMPARE(lastProgress, qint64(installer.size()));
+
+    // Review B45 M2: each download is a new file, the earlier one is removed; the
+    // installer is checked again before it starts
+    const QString second = PDFUpdateChecker::download(*update, directory.path(), nullptr, &errorMessage);
+    QVERIFY2(!second.isEmpty() && second != file && !QFile::exists(file), qPrintable(errorMessage));
+    QCOMPARE(PDFUpdateChecker::getFileSha256(second), update->sha256);
+    {
+        QFile changed(second);
+        QVERIFY(changed.open(QFile::ReadWrite));
+        changed.write("X");
+    }
+    QVERIFY(!PDFUpdateChecker::startInstaller(second, update->sha256, &errorMessage));
+    QVERIFY(errorMessage.contains(QStringLiteral("changed")));
+
+    // Review B45 M3: a cancelled download stops and leaves no file
+    std::atomic_bool cancel = true;
+    QVERIFY(PDFUpdateChecker::download(*update, directory.path(), nullptr, &errorMessage, &cancel).isEmpty());
+    QVERIFY(errorMessage.contains(QStringLiteral("cancelled")));
+    QVERIFY(QDir(directory.path()).entryList({ QStringLiteral("AndrePDF_*") }, QDir::Files).isEmpty());
 
     // An installer of the same size but other bytes, or a larger one, is refused and deleted
     currentInstaller = QByteArray(installer.size(), 'B');
     QVERIFY(PDFUpdateChecker::download(*update, directory.path(), nullptr, &errorMessage).isEmpty());
-    QVERIFY(!QFile::exists(file));
+    QVERIFY(QDir(directory.path()).entryList({ QStringLiteral("AndrePDF_*") }, QDir::Files).isEmpty());
     currentInstaller = installer + QByteArray(1000, 'C');
     QVERIFY(PDFUpdateChecker::download(*update, directory.path(), nullptr, &errorMessage).isEmpty());
-    QVERIFY(!QFile::exists(file));
+    QVERIFY(QDir(directory.path()).entryList({ QStringLiteral("AndrePDF_*") }, QDir::Files).isEmpty());
 
     PDFUpdateChecker::setTestConfiguration(QString(), QByteArray(), QStringList());
 }
@@ -271,7 +325,7 @@ void UpdateTest::releaseToolsInterop()
     QCOMPARE(update->size, qint64(5000));
 
     // An entry without its summary stops the release tool
-    changelog.open(QFile::WriteOnly | QFile::Truncate);
+    QVERIFY(changelog.open(QFile::WriteOnly | QFile::Truncate));
     changelog.write("## 9.0.0 - 2027-01-01\n\n- Change one.\n");
     changelog.close();
     process.start(python, { "-I", sourceDirectory + "/tools/make_update_manifest.py", "--version", "9.0.0", "--msi", installer.fileName(),

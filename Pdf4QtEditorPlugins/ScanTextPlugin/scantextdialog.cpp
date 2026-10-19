@@ -328,7 +328,8 @@ bool ScanTextDialog::ensureInstalled(const QString& family)
     }
 
     if (QMessageBox::question(this, windowTitle(),
-                              tr("The font %1 is not installed. Download it from Fontsource and install it for your user?\n\nLicence: %2 (free to use and to embed in documents).").arg(font->family, font->license),
+                              tr("The font %1 is not installed. Download it from Fontsource and install it for your user?\n\nLicence: %2 (free to use and to embed in documents).\n"
+                                 "The download comes from api.fontsource.org and cdn.jsdelivr.net, which see the address of your computer.").arg(font->family, font->license),
                               QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes) != QMessageBox::Yes)
     {
         return false;
@@ -341,6 +342,11 @@ bool ScanTextDialog::ensureInstalled(const QString& family)
     {
         QMessageBox::critical(this, windowTitle(), errorMessage);
         return false;
+    }
+    if (!errorMessage.isEmpty())
+    {
+        // Installed, but not every style (the message names them)
+        QMessageBox::warning(this, windowTitle(), errorMessage);
     }
 
     m_trialFamilies.remove(family);

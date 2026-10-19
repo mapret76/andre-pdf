@@ -284,6 +284,14 @@ bool PDFOfficeExporter::parseNumber(const QString& text, double& value)
         return false;
     }
 
+    // Leading zeros (phone numbers, codes) and 11 digits or more (ID numbers) are text,
+    // whatever the grouping ("012 345", "62 123 456 789")
+    const QString integerPart = normalized.section(QChar('.'), 0, 0);
+    if ((integerPart.size() > 1 && integerPart.startsWith(QChar('0'))) || integerPart.size() > 10)
+    {
+        return false;
+    }
+
     bool ok = false;
     value = normalized.toDouble(&ok);
     if (negative)

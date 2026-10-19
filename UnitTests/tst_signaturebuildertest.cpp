@@ -135,6 +135,7 @@ private slots:
     void fontMatching();
     void fontInstaller();
     void scanTextEdit();
+    void scanTextForeignOcr_data();
     void scanTextForeignOcr();
     void scanFont();
     void versionHistory();
@@ -753,6 +754,13 @@ void SignatureBuilderTest::certificationMustBeFirst()
     QCOMPARE(signDocument(readDocument(certified), certified, certificate, password, "Countersignature", countersigned), PDFDocumentSigner::Result::OK);
     const PDFDocument countersignedDocument = readDocument(countersigned);
     QCOMPARE(PDFOCRApplyProcessor::getCertificationPermissions(&countersignedDocument), PDFOCRApplyProcessor::CertificationPermissions::FormFilling);
+
+    // After "no changes" no approval signature is allowed: it would break the certification
+    QByteArray locked;
+    QCOMPARE(signDocument(document, QByteArray(), certificate, password, "Certification", locked, PDFDocumentSigner::Certification::NoChanges), PDFDocumentSigner::Result::OK);
+    QByteArray refused;
+    QCOMPARE(signDocument(readDocument(locked), locked, certificate, password, "Countersignature", refused), PDFDocumentSigner::Result::DocumentLockedNoChanges);
+    QVERIFY(refused.isEmpty());
 }
 
 void SignatureBuilderTest::verificationStamp()
@@ -780,6 +788,16 @@ void SignatureBuilderTest::verificationStamp()
     QVERIFY(payload.contains(QStringLiteral("Lock: no changes")));
     QVERIFY(payload.contains(QString::fromLatin1(data.documentSha256.toHex().toUpper())));
     QVERIFY(payload.contains(QString::fromLatin1(data.certificateSha256.toHex().toUpper())));
+    // B3: the issuer and the serial number name the certificate for a third party
+    const auto realEntry = PDFCertificateManager::createEntryFromPkcs12(certificate.pkcs12, password);
+    QVERIFY(realEntry);
+    const PDFSignatureStamp::Data realData = PDFSignatureStamp::create(realEntry->info, time, PDFDocumentSigner::Certification::NoChanges, original);
+    const QString realPayload = PDFSignatureStamp::getPayload(realData);
+    QVERIFY(!realData.serialNumber.isEmpty() && realPayload.contains(QStringLiteral("Certificate serial: ") + realData.serialNumber));
+    QVERIFY(!realData.issuer.isEmpty() && realPayload.contains(QStringLiteral("Issuer: ") + realData.issuer));
+    QVERIFY(realData.issuerName.contains(QStringLiteral("PDF4QT")) || !realData.issuerName.contains(QStringLiteral("CN=")));
+    QVERIFY(PDFSignatureStamp::getTextLines(realData).join('\n').contains(QStringLiteral("Issued by ")));
+    QVERIFY(PDFSignatureStamp::getTextLines(data).join('\n').indexOf(QStringLiteral("Issued by ")) == -1);   // unreadable certificate: no line
     QVERIFY(PDFSignatureStamp::getTextLines(data).join('\n').contains(PDFSignatureStamp::formatFingerprint(data.documentSha256, 8)));
     QCOMPARE(PDFSignatureStamp::formatFingerprint(QByteArray::fromHex("0123456789abcdef")), QStringLiteral("0123 4567 89AB CDEF"));
 
@@ -1162,6 +1180,16 @@ void SignatureBuilderTest::signatureLineLabels()
     QVERIFY(PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("For the Purchaser:")));
     QVERIFY(PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("For and on behalf of the Seller")));
     QVERIFY(PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Vir die Koper:")));
+    // Review R0 verification N1
+    QVERIFY(PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Signed on behalf of the Seller")));
+    QVERIFY(PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Signature / Date")));
+    QVERIFY(PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Initials")));
+    QVERIFY(!PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Date of signature")));
+    QVERIFY(!PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Place of signature")));
+    QVERIFY(!PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Signature date")));
+    QVERIFY(!PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Signed on 18 October 2026")));
+    QVERIFY(!PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Initials and Surname")));
+    QVERIFY(!PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Surname and initials")));
 }
 
 void SignatureBuilderTest::signatureLineFinder()
@@ -1416,6 +1444,12 @@ void SignatureBuilderTest::officeExport()
     QVERIFY(PDFOfficeExporter::parseNumber(QStringLiteral("1 234,56"), value) && qFuzzyCompare(value, 1234.56));
     QVERIFY(PDFOfficeExporter::parseNumber(QStringLiteral("1,234.56"), value) && qFuzzyCompare(value, 1234.56));
     QVERIFY(PDFOfficeExporter::parseNumber(QStringLiteral("R 250.00"), value) && qFuzzyCompare(value, 250.0));
+    // Review R0 verification N7: codes and ID numbers in groups stay text
+    QVERIFY(!PDFOfficeExporter::parseNumber(QStringLiteral("012 345"), value));
+    QVERIFY(!PDFOfficeExporter::parseNumber(QStringLiteral("62 123 456 789"), value));
+    QVERIFY(!PDFOfficeExporter::parseNumber(QStringLiteral("1 234 567 890 123"), value));
+    QVERIFY(!PDFOfficeExporter::parseNumber(QStringLiteral("0123.45"), value));
+    QVERIFY(PDFOfficeExporter::parseNumber(QStringLiteral("0.125"), value) && qFuzzyCompare(value, 0.125));
     QVERIFY(PDFOfficeExporter::parseNumber(QStringLiteral("-12"), value) && qFuzzyCompare(value, -12.0));
     QVERIFY(PDFOfficeExporter::parseNumber(QStringLiteral("1,000,000"), value) && qFuzzyCompare(value, 1000000.0));
     QVERIFY(!PDFOfficeExporter::parseNumber(QStringLiteral("Clay bricks"), value));
@@ -2007,7 +2041,7 @@ void SignatureBuilderTest::versionHistory()
     const PDFVersionHistory::Releases newer = PDFVersionHistory::getNewer(releases, QStringLiteral("1.0.0"));
     QCOMPARE(newer.size(), size_t(2));
     QVERIFY(PDFVersionHistory::getNewer(releases, QStringLiteral("1.10.0")).empty());
-    QVERIFY(PDFVersionHistory::toMarkdown(newer).contains(QStringLiteral("**Big one.**")));
+    QVERIFY(PDFVersionHistory::toMarkdown(newer).contains(QStringLiteral("**Big one\\.**")));
 
     // The program carries its own history, its newest entry is its version
     const PDFVersionHistory::Releases embedded = PDFVersionHistory::parse(PDFVersionHistory::getEmbeddedHistory());
@@ -2019,8 +2053,18 @@ void SignatureBuilderTest::versionHistory()
     }
 }
 
+void SignatureBuilderTest::scanTextForeignOcr_data()
+{
+    QTest::addColumn<QByteArray>("ocrText");
+    QTest::newRow("text object per line") << QByteArray("BT 3 Tr /AndreOcr 11 Tf 58 620 Td (Purchase price R 950 000) Tj ET\nBT 3 Tr /AndreOcr 11 Tf 58 400 Td (Elsewhere) Tj ET\n");
+    // As Tesseract writes it: one text object for the page (review R0 verification N2)
+    QTest::newRow("one text object") << QByteArray("BT 3 Tr /AndreOcr 11 Tf 58 620 Td (Purchase price R 950 000) Tj 0 -220 Td (Elsewhere) Tj 0 -100 Td (Third line) Tj ET\n");
+}
+
 void SignatureBuilderTest::scanTextForeignOcr()
 {
+    QFETCH(QByteArray, ocrText);
+
     if (!PDFFontIdentifier::isInstalled(QStringLiteral("DejaVu Serif")))
     {
         QSKIP("The font DejaVu Serif is not installed");
@@ -2046,7 +2090,6 @@ void SignatureBuilderTest::scanTextForeignOcr()
         painter->drawImage(QRectF(55, 842 - 230, 250, 30), scan);
         content.end(painter);
     }
-    const QByteArray ocrText = "BT 3 Tr /AndreOcr 11 Tf 58 620 Td (Purchase price R 950 000) Tj ET\nBT 3 Tr /AndreOcr 11 Tf 58 400 Td (Elsewhere) Tj ET\n";
     PDFDictionaryBuilder streamDictionary;
     streamDictionary.setEntry(PDFInplaceOrMemoryString("Length"), PDFObject::createInteger(ocrText.size()));
     const PDFObjectReference ocrStream = builder.addObject(PDFObject::createStream(PDFStream(std::move(streamDictionary), QByteArray(ocrText))));
@@ -2117,6 +2160,10 @@ void SignatureBuilderTest::scanTextForeignOcr()
     const QString text = PDFScanTextEditor::getText(edited.data(), 0, area);
     QVERIFY2(!text.contains(QStringLiteral("950")) && text.contains(QStringLiteral("875 000")), qPrintable(text));
     QVERIFY(PDFScanTextEditor::getText(edited.data(), 0, QRectF(50, 390, 200, 30)).contains(QStringLiteral("Elsewhere")));
+    if (ocrText.contains("Third line"))
+    {
+        QVERIFY(PDFScanTextEditor::getText(edited.data(), 0, QRectF(50, 290, 200, 30)).contains(QStringLiteral("Third line")));
+    }
 
     // The image of the scan is still drawn (outside the edited area)
     const QImage rendered = PDFScanTextEditor::renderArea(edited.data(), 0, QRectF(55, 842 - 230, 250, 30), 72);

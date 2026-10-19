@@ -35,12 +35,21 @@
 #include <QCryptographicHash>
 #include <QRegularExpression>
 #include <QNetworkAccessManager>
+#include <QElapsedTimer>
+#include <QTimer>
+#include <QRandomGenerator>
 
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/bio.h>
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
 #include <algorithm>
+#include <atomic>
+#include <cmath>
 
 #include "pdfdbgheap.h"
 
@@ -66,21 +75,44 @@ public:
         return value;
     }
 
-    /// Downloads a URL with a size limit, synchronously; redirects to other origins
-    /// are followed only to HTTPS (the release files of GitHub are redirected)
-    static std::optional<QByteArray> get(const QUrl& url, qint64 limit, QString* errorMessage, QIODevice* output = nullptr, const std::function<void(qint64, qint64)>& progress = nullptr)
+    /// Downloads a URL with a size limit, synchronously; redirects are followed only to
+    /// HTTPS on the allowed hosts (the release files of GitHub are redirected). The whole
+    /// transfer has a deadline, and it stops when \p cancel is set.
+    static std::optional<QByteArray> get(const QUrl& url, qint64 limit, QString* errorMessage, QIODevice* output = nullptr,
+                                         const std::function<void(qint64, qint64)>& progress = nullptr, const std::atomic_bool* cancel = nullptr)
     {
         QNetworkAccessManager manager;
         QNetworkRequest request(url);
         request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Andre PDF updater"));
         request.setTransferTimeout(60000);
-        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, configuration().requireHttps ? QNetworkRequest::NoLessSafeRedirectPolicy : QNetworkRequest::SameOriginRedirectPolicy);
+        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, configuration().requireHttps ? QNetworkRequest::UserVerifiedRedirectPolicy : QNetworkRequest::SameOriginRedirectPolicy);
         QNetworkReply* reply = manager.get(request);
+        if (configuration().requireHttps)
+        {
+            QObject::connect(reply, &QNetworkReply::redirected, reply, [reply](const QUrl& target)
+            {
+                if (target.scheme() == QStringLiteral("https") && target.userInfo().isEmpty() && configuration().allowedHosts.contains(target.host(), Qt::CaseInsensitive))
+                {
+                    Q_EMIT reply->redirectAllowed();
+                }
+                else
+                {
+                    reply->abort();
+                }
+            });
+        }
 
         QByteArray data;
         bool isTooLarge = false;
+        bool isStopped = false;
         QObject::connect(reply, &QNetworkReply::readyRead, reply, [&]()
         {
+            if (cancel && cancel->load())
+            {
+                isStopped = true;
+                reply->abort();
+                return;
+            }
             const QByteArray chunk = reply->readAll();
             const qint64 received = (output ? output->size() : data.size()) + chunk.size();
             if (received > limit)
@@ -103,18 +135,41 @@ public:
             }
         });
 
+        // A connection that trickles data never times out by itself: the whole transfer
+        // must end in two minutes plus the time at 64 kB/s; cancel is polled, too
         QEventLoop loop;
+        QElapsedTimer elapsed;
+        elapsed.start();
+        const qint64 deadline = 120000 + limit / 64;
+        QTimer poll;
+        QObject::connect(&poll, &QTimer::timeout, reply, [&]()
+        {
+            if ((cancel && cancel->load()) || elapsed.elapsed() > deadline)
+            {
+                isStopped = true;
+                reply->abort();
+            }
+        });
+        poll.start(200);
         QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
         if (!reply->isFinished())
         {
             loop.exec();
         }
+        poll.stop();
 
-        const bool isOK = reply->error() == QNetworkReply::NoError && !isTooLarge;
+        const bool isOK = reply->error() == QNetworkReply::NoError && !isTooLarge && !isStopped;
         if (!isOK && errorMessage)
         {
-            *errorMessage = isTooLarge ? PDFUpdateChecker::tr("%1 is larger than expected.").arg(url.toString())
-                                       : PDFUpdateChecker::tr("Download of %1 failed: %2").arg(url.toString(), reply->errorString());
+            if (isStopped)
+            {
+                *errorMessage = (cancel && cancel->load()) ? PDFUpdateChecker::tr("The download was cancelled.") : PDFUpdateChecker::tr("The download of %1 took too long.").arg(url.toString());
+            }
+            else
+            {
+                *errorMessage = isTooLarge ? PDFUpdateChecker::tr("%1 is larger than expected.").arg(url.toString())
+                                           : PDFUpdateChecker::tr("Download of %1 failed: %2").arg(url.toString(), reply->errorString());
+            }
         }
         reply->deleteLater();
         return isOK ? std::optional<QByteArray>(data) : std::nullopt;
@@ -174,7 +229,9 @@ bool PDFUpdateChecker::verifySignature(const QByteArray& data, const QByteArray&
 
     // Only an EC key of the curve P-256 is accepted
     bool isVerified = false;
-    if (EVP_PKEY_is_a(key, "EC") && EVP_PKEY_get_bits(key) == 256)
+    char group[64] = {};
+    size_t groupLength = 0;
+    if (EVP_PKEY_is_a(key, "EC") && EVP_PKEY_get_group_name(key, group, sizeof(group), &groupLength) == 1 && QByteArray(group) == "prime256v1")
     {
         EVP_MD_CTX* context = EVP_MD_CTX_new();
         if (context && EVP_DigestVerifyInit(context, nullptr, EVP_sha256(), nullptr, key) == 1 &&
@@ -252,15 +309,19 @@ std::optional<PDFUpdateChecker::Update> PDFUpdateChecker::parseManifest(const QB
     }
 
     const QJsonObject installer = root.value(platform).toObject();
-    update.url = QUrl(installer.value(QStringLiteral("url")).toString());
-    update.sha256 = QByteArray::fromHex(installer.value(QStringLiteral("sha256")).toString().toLatin1());
-    update.size = qint64(installer.value(QStringLiteral("size")).toDouble());
+    update.url = QUrl(installer.value(QStringLiteral("url")).toString(), QUrl::StrictMode);
+    static const QRegularExpression sha256Pattern(QRegularExpression::anchoredPattern(QStringLiteral("[0-9a-fA-F]{64}")));
+    const QString sha256 = installer.value(QStringLiteral("sha256")).toString();
+    update.sha256 = sha256Pattern.match(sha256).hasMatch() ? QByteArray::fromHex(sha256.toLatin1()) : QByteArray();
+    const double size = installer.value(QStringLiteral("size")).toDouble();
+    update.size = (size == std::floor(size) && size > 0 && size <= double(MAXIMAL_INSTALLER_SIZE)) ? qint64(size) : 0;
     if (!update.url.isValid() || update.url.isRelative() || installer.isEmpty())
     {
         return fail(tr("Version %1 has no installer for this computer.").arg(update.version));
     }
     const PDFUpdateCheckerHelper::Configuration& configuration = PDFUpdateCheckerHelper::configuration();
-    if ((configuration.requireHttps && update.url.scheme() != QStringLiteral("https")) || !configuration.allowedHosts.contains(update.url.host(), Qt::CaseInsensitive))
+    if ((configuration.requireHttps && (update.url.scheme() != QStringLiteral("https") || !update.url.userInfo().isEmpty() || update.url.port() != -1)) ||
+        !configuration.allowedHosts.contains(update.url.host(), Qt::CaseInsensitive))
     {
         return fail(tr("The installer of version %1 is not offered from GitHub over HTTPS.").arg(update.version));
     }
@@ -295,14 +356,24 @@ std::optional<PDFUpdateChecker::Update> PDFUpdateChecker::check(const QString& c
     return parseManifest(*manifest, currentVersion, getPlatform(), errorMessage);
 }
 
-QString PDFUpdateChecker::download(const Update& update, const QString& directory, const std::function<void(qint64, qint64)>& progress, QString* errorMessage)
+QString PDFUpdateChecker::download(const Update& update, const QString& directory, const std::function<void(qint64, qint64)>& progress, QString* errorMessage, const std::atomic_bool* cancel)
 {
-    QDir().mkpath(directory);
-    // The name is ours, nothing of the manifest goes into the path
-    const QString fileName = QDir(directory).filePath(QString("AndrePDF_%1%2").arg(update.version, getPlatform() == QStringLiteral("windows") ? QStringLiteral(".msi") : QStringLiteral(".bin")));
+    QDir folder(directory);
+    folder.mkpath(QStringLiteral("."));
+
+    // Installers of earlier downloads are removed (about 50 MB each)
+    for (const QFileInfo& old : folder.entryInfoList({ QStringLiteral("AndrePDF_*") }, QDir::Files))
+    {
+        QFile::remove(old.absoluteFilePath());
+    }
+
+    // The name is ours, nothing of the manifest but the checked version goes into it; it
+    // is new for each download, so a checked file is never overwritten by another one
+    const QString suffix = getPlatform() == QStringLiteral("windows") ? QStringLiteral(".msi") : QStringLiteral(".bin");
+    const QString fileName = folder.filePath(QString("AndrePDF_%1_%2%3").arg(update.version, QString::number(QRandomGenerator::system()->generate64(), 16), suffix));
 
     QFile file(fileName);
-    if (!file.open(QFile::WriteOnly | QFile::Truncate))
+    if (!file.open(QFile::WriteOnly | QFile::NewOnly))
     {
         if (errorMessage)
         {
@@ -311,22 +382,10 @@ QString PDFUpdateChecker::download(const Update& update, const QString& director
         return QString();
     }
 
-    const std::optional<QByteArray> result = PDFUpdateCheckerHelper::get(update.url, update.size, errorMessage, &file, progress);
+    const std::optional<QByteArray> result = PDFUpdateCheckerHelper::get(update.url, update.size, errorMessage, &file, progress, cancel);
     file.close();
 
-    QByteArray hash;
-    if (result && QFile::exists(fileName))
-    {
-        QFile check(fileName);
-        if (check.open(QFile::ReadOnly))
-        {
-            QCryptographicHash sha256(QCryptographicHash::Sha256);
-            sha256.addData(&check);
-            hash = sha256.result();
-        }
-    }
-
-    if (!result || QFileInfo(fileName).size() != update.size || hash != update.sha256)
+    if (!result || QFileInfo(fileName).size() != update.size || getFileSha256(fileName) != update.sha256)
     {
         QFile::remove(fileName);
         if (result && errorMessage)
@@ -338,27 +397,70 @@ QString PDFUpdateChecker::download(const Update& update, const QString& director
     return fileName;
 }
 
-bool PDFUpdateChecker::startInstaller(const QString& fileName, QString* errorMessage)
+QByteArray PDFUpdateChecker::getFileSha256(const QString& fileName)
 {
+    QFile file(fileName);
+    if (!file.open(QFile::ReadOnly))
+    {
+        return QByteArray();
+    }
+    QCryptographicHash sha256(QCryptographicHash::Sha256);
+    sha256.addData(&file);
+    return sha256.result();
+}
+
+bool PDFUpdateChecker::startInstaller(const QString& fileName, const QByteArray& sha256, QString* errorMessage)
+{
+    auto fail = [errorMessage](const QString& message)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = message;
+        }
+        return false;
+    };
+
 #ifdef Q_OS_WIN
+    // The file is opened without write and delete sharing and checked again; the handle
+    // stays open until the program exits, so the checked file cannot be replaced while
+    // msiexec starts with it.
+    // ponytail: msiexec reads the package again after the program has quit; an
+    // Authenticode-signed MSI (a code signing certificate) closes that last gap
+    const std::wstring nativeName = QDir::toNativeSeparators(fileName).toStdWString();
+    HANDLE handle = CreateFileW(nativeName.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (handle == INVALID_HANDLE_VALUE)
+    {
+        return fail(tr("The downloaded installer cannot be opened."));
+    }
+
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    QByteArray buffer(1 << 16, Qt::Uninitialized);
+    DWORD read = 0;
+    while (ReadFile(handle, buffer.data(), DWORD(buffer.size()), &read, nullptr) && read > 0)
+    {
+        hash.addData(QByteArrayView(buffer.constData(), qsizetype(read)));
+    }
+    if (hash.result() != sha256)
+    {
+        CloseHandle(handle);
+        QFile::remove(fileName);
+        return fail(tr("The downloaded installer was changed after its check; it was deleted."));
+    }
+
     // msiexec of the system, not one found in the path
     const QString msiexec = QDir::fromNativeSeparators(qEnvironmentVariable("SystemRoot", QStringLiteral("C:\\Windows"))) + QStringLiteral("/System32/msiexec.exe");
     if (QProcess::startDetached(QDir::toNativeSeparators(msiexec), { QStringLiteral("/i"), QDir::toNativeSeparators(fileName) }))
     {
-        return true;
+        return true;    // the handle is released when the program exits
     }
-    if (errorMessage)
-    {
-        *errorMessage = tr("The installer could not be started.");
-    }
-    return false;
+    CloseHandle(handle);
+    return fail(tr("The installer could not be started."));
 #else
-    Q_UNUSED(fileName);
-    if (errorMessage)
+    if (getFileSha256(fileName) != sha256)
     {
-        *errorMessage = tr("Install the downloaded version with the package manager of this system: %1").arg(fileName);
+        return fail(tr("The downloaded installer was changed after its check."));
     }
-    return false;
+    return fail(tr("Install the downloaded version with the package manager of this system: %1").arg(fileName));
 #endif
 }
 

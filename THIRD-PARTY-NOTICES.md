@@ -61,7 +61,7 @@ file already carries it.
 
 | Service | Terms | Use |
 | --- | --- | --- |
-| [Fontsource](https://fontsource.org) API and its CDN (jsDelivr) | MIT (Fontsource), fonts under their own free licences (mostly OFL-1.1, Apache-2.0) | Finding and downloading free fonts for editing scanned text in its original font. Only fonts with a free licence are downloaded; a downloaded font keeps its own licence, which the font file carries. |
+| [Fontsource](https://fontsource.org) API and its CDN (jsDelivr) | MIT (Fontsource), fonts under their own free licences (mostly OFL-1.1, Apache-2.0) | Finding and downloading free fonts for editing scanned text in its original font. Only fonts with a free licence are downloaded, and only after the user agrees; the services see the address of the computer. A downloaded font keeps its own licence, which the font file carries. |
 
 ## Tools used to build it (not distributed)
 

@@ -45,6 +45,7 @@
 #include "pdfupdatedialog.h"
 #include "pdfupdatechecker.h"
 #include "pdfdocumentsigner.h"
+#include <atomic>
 #include <QLocale>
 #include "pdfsanitizedocumentdialog.h"
 #include "pdfcreatebitonaldocumentdialog.h"
@@ -1679,15 +1680,24 @@ void PDFProgramController::checkForUpdates(bool isAutomatic)
     settings.beginGroup(QStringLiteral("AndrePDF"));
     if (isAutomatic)
     {
-        // Once a day, and not when the user turned it off
+        // Once a day after a completed check (an offline start checks again at the next
+        // start, a clock set wrong once does not stop the checks), not when the user turned
+        // it off, and only where an installer is offered
         const QDate lastCheck = settings.value(QStringLiteral("LastUpdateCheck")).toDate();
-        if (!settings.value(QStringLiteral("CheckForUpdatesAtStart"), true).toBool() || (lastCheck.isValid() && lastCheck >= QDate::currentDate()))
+        if (!settings.value(QStringLiteral("CheckForUpdatesAtStart"), true).toBool() || lastCheck == QDate::currentDate() ||
+            pdf::PDFUpdateChecker::getPlatform() != QStringLiteral("windows"))
         {
             return;
         }
     }
-    settings.setValue(QStringLiteral("LastUpdateCheck"), QDate::currentDate());
     settings.endGroup();
+
+    // One check at a time
+    if (m_isCheckingForUpdates)
+    {
+        return;
+    }
+    m_isCheckingForUpdates = true;
 
     // The network work runs in a thread; the result comes back to the window
     struct Result
@@ -1705,6 +1715,12 @@ void PDFProgramController::checkForUpdates(bool isAutomatic)
     connect(thread, &QThread::finished, this, [this, thread, result, isAutomatic, currentVersion]()
     {
         thread->deleteLater();
+        m_isCheckingForUpdates = false;
+        if (result->update || result->errorMessage.isEmpty())
+        {
+            QSettings completedSettings;
+            completedSettings.setValue(QStringLiteral("AndrePDF/LastUpdateCheck"), QDate::currentDate());
+        }
         if (!isAutomatic)
         {
             QApplication::restoreOverrideCursor();
@@ -1738,7 +1754,7 @@ void PDFProgramController::offerUpdate(const pdf::PDFUpdateChecker::Update& upda
         return;     // the user skipped this version; a newer one is offered again
     }
 
-    PDFUpdateDialog dialog(m_mainWindow, update, QApplication::applicationVersion());
+    PDFUpdateDialog dialog(m_mainWindow, update, QApplication::applicationVersion(), isAutomatic);
     dialog.exec();
     if (dialog.getChoice() == PDFUpdateDialog::Choice::Skip)
     {
@@ -1752,10 +1768,14 @@ void PDFProgramController::offerUpdate(const pdf::PDFUpdateChecker::Update& upda
     settings.endGroup();
 
     // Download with progress in a thread, then the checks of the size and the SHA-256
-    QProgressDialog progress(tr("Downloading Andre PDF %1...").arg(update.version), QString(), 0, 1000, m_mainWindow);
+    QProgressDialog progress(tr("Downloading Andre PDF %1...").arg(update.version), tr("Cancel"), 0, 1000, m_mainWindow);
     progress.setWindowModality(Qt::WindowModal);
     progress.setMinimumDuration(0);
+    progress.setAutoClose(false);
+    progress.setAutoReset(false);
     progress.setValue(0);
+    std::atomic_bool isCancelled = false;
+    connect(&progress, &QProgressDialog::canceled, &progress, [&isCancelled]() { isCancelled = true; });
 
     QString fileName;
     QString errorMessage;
@@ -1766,7 +1786,7 @@ void PDFProgramController::offerUpdate(const pdf::PDFUpdateChecker::Update& upda
         {
             const int value = int(received * 1000 / qMax<qint64>(1, update.size));
             QMetaObject::invokeMethod(&progress, [&progress, value]() { progress.setValue(qMin(value, 999)); }, Qt::QueuedConnection);
-        }, &errorMessage);
+        }, &errorMessage, &isCancelled);
     });
     QEventLoop loop;
     connect(thread, &QThread::finished, &loop, &QEventLoop::quit);
@@ -1783,15 +1803,20 @@ void PDFProgramController::offerUpdate(const pdf::PDFUpdateChecker::Update& upda
     }
 
     if (QMessageBox::question(m_mainWindow, tr("Update"), tr("Andre PDF %1 is downloaded and checked. Close Andre PDF and install it now?").arg(update.version),
-                              QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes) != QMessageBox::Yes || !askForSaveDocumentBeforeClose())
+                              QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
     {
         return;
     }
 
-    if (!pdf::PDFUpdateChecker::startInstaller(fileName, &errorMessage))
+    // The window closes as usual (the document is saved or discarded once); only then
+    // the installer starts, so it never runs while Andre PDF stays open
+    if (!m_mainWindow->close())
     {
-        QMessageBox::information(m_mainWindow, tr("Update"), errorMessage);
         return;
+    }
+    if (!pdf::PDFUpdateChecker::startInstaller(fileName, update.sha256, &errorMessage))
+    {
+        QMessageBox::information(nullptr, tr("Update"), errorMessage);
     }
     QApplication::quit();
 }

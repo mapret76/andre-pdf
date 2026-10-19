@@ -60,6 +60,9 @@ public:
         QDateTime signingTime;
         PDFDocumentSigner::Certification certification = PDFDocumentSigner::Certification::None;
         QByteArray certificateSha256;   ///< SHA-256 of the DER encoded signing certificate
+        QString issuer;                 ///< Distinguished name of the issuer of the certificate
+        QString issuerName;             ///< Common name (or organization) of the issuer
+        QString serialNumber;           ///< Serial number of the certificate, hexadecimal
         QByteArray documentSha256;      ///< SHA-256 of the file before the signature, empty for a new file
     };
 

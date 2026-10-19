@@ -87,7 +87,9 @@ public:
         SignatureTooLarge,              ///< Signature did not fit into the reserved space
         VerificationFailed,             ///< Newly created signature of the written document could not be verified
         ExistingSignaturesNotPreserved, ///< Document contains signatures, which would be damaged by writing the document
-        CertificationNotFirst           ///< Certification signature was requested, but it would not be the first signature of the document
+        CertificationNotFirst,          ///< Certification signature was requested, but it would not be the first signature of the document
+        DocumentLockedNoChanges,        ///< The document is certified "no changes", a new signature would break the certification
+        IncrementalUpdateFailed         ///< The update could not be appended to the original data, which was required
     };
 
     /// Certification (DocMDP) of the document by the created signature, the value
@@ -142,6 +144,10 @@ public:
         /// Password opening the document, when it is already encrypted (the signed
         /// document is read back with it to verify the new signature)
         QString openPassword;
+
+        /// When set, the signature must be appended to the original data (the visible stamp
+        /// carries their fingerprint); the document is never written as a whole instead
+        bool requireIncrementalUpdate = false;
 
         /// Progress reporting of the document writer, can be nullptr
         PDFProgress* progress = nullptr;

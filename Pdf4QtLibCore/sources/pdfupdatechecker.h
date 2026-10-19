@@ -31,6 +31,7 @@
 #include <QByteArray>
 #include <QCoreApplication>
 
+#include <atomic>
 #include <functional>
 #include <optional>
 
@@ -74,13 +75,20 @@ public:
     /// update it offers. Blocking: run it in a worker thread.
     static std::optional<Update> check(const QString& currentVersion, QString* errorMessage);
 
-    /// Downloads the installer into the directory and verifies its size and SHA-256.
-    /// Returns the file, empty on failure (a partial or wrong file is deleted).
+    /// Downloads the installer into a new file of the directory (earlier installers there
+    /// are removed) and verifies its size and SHA-256. Returns the file, empty on failure
+    /// (a partial or wrong file is deleted).
     /// \param progress Called with the received and the total bytes, can be empty
-    static QString download(const Update& update, const QString& directory, const std::function<void(qint64, qint64)>& progress, QString* errorMessage);
+    /// \param cancel When set (from another thread), the download stops
+    static QString download(const Update& update, const QString& directory, const std::function<void(qint64, qint64)>& progress, QString* errorMessage,
+                            const std::atomic_bool* cancel = nullptr);
 
-    /// Starts the installer (Windows: msiexec), the program should quit then
-    static bool startInstaller(const QString& fileName, QString* errorMessage);
+    /// Checks the SHA-256 of the installer again, locked against changes, and starts it
+    /// (Windows: msiexec); the program should quit then
+    static bool startInstaller(const QString& fileName, const QByteArray& sha256, QString* errorMessage);
+
+    /// SHA-256 of the file, empty when it cannot be read
+    static QByteArray getFileSha256(const QString& fileName);
 
     /// Returns the public key of the releases (PEM)
     static QByteArray getReleasePublicKey();

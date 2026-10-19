@@ -335,7 +335,7 @@ bool PDFFontInstaller::install(const FontInfo& font, QString* errorMessage)
             {
                 if (errorMessage)
                 {
-                    *errorMessage = installed > 0 ? tr("%1 styles of %2 were installed, then: %3").arg(installed).arg(font.family, styleError) : styleError;
+                    *errorMessage = installed > 0 ? tr("%1 styles of %2 were installed, then: %3").arg(QString::number(installed), font.family, styleError) : styleError;
                 }
                 return installed > 0;
             }

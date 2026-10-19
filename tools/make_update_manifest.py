@@ -9,6 +9,9 @@ def parse_changelog(text):
     for raw in text.splitlines():
         line = raw.strip()
         m = heading.match(line)
+        # The program ignores a heading of an invalid version: here it is an error
+        if line.startswith('## ') and (not m or not re.fullmatch(r'\d{1,5}(\.\d{1,5}){0,3}', m.group(1))):
+            sys.exit(f'CHANGELOG.md: invalid version heading: {line}')
         if m:
             releases.append({'version': m.group(1), 'date': m.group(2) or '', 'summary': '', 'changes': []})
             continue

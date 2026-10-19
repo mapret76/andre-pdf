@@ -532,6 +532,7 @@ private:
     QStringList m_enabledPlugins;
     QStringList m_knownPlugins;     ///< Plugins found before; a plugin new to the user is enabled
     bool m_isKnownPluginsMissing = false;
+    bool m_isCheckingForUpdates = false;
     bool m_loadAllPlugins;
     pdf::PDFPluginInfos m_plugins;
     std::vector<std::pair<pdf::PDFPluginInfo, pdf::PDFPlugin*>> m_loadedPlugins;
