@@ -175,7 +175,7 @@ public:
         QNetworkAccessManager manager;
         QNetworkRequest networkRequest(url);
         networkRequest.setTransferTimeout(timeout);
-        networkRequest.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+        networkRequest.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::SameOriginRedirectPolicy);
         networkRequest.setMaximumRedirectsAllowed(3);
         if (!contentType.isEmpty())
         {
@@ -266,13 +266,19 @@ public:
         return result;
     }
 
+    /// Time left for one request: the limit of a request, within the overall budget
+    static int getRemaining(const QDeadlineTimer& budget, int timeout)
+    {
+        return int(qMax<qint64>(1, qMin<qint64>(timeout, budget.remainingTime())));
+    }
+
     /// Fetches the issuer of a certificate from its "CA issuers" address
-    static X509* fetchIssuer(X509* certificate, int timeout)
+    static X509* fetchIssuer(X509* certificate, const QDeadlineTimer& budget, int timeout)
     {
         for (const QString& uri : getAccessUris(certificate, NID_ad_ca_issuers))
         {
             QString errorMessage;
-            const QByteArray data = request(uri, QByteArray(), QByteArray(), PDFLongTermValidation::MAXIMAL_CERTIFICATE_SIZE, timeout, errorMessage);
+            const QByteArray data = request(uri, QByteArray(), QByteArray(), PDFLongTermValidation::MAXIMAL_CERTIFICATE_SIZE, getRemaining(budget, timeout), errorMessage);
             const unsigned char* pointer = reinterpret_cast<const unsigned char*>(data.constData());
             X509* issuer = d2i_X509(nullptr, &pointer, data.size());
             if (!issuer)
@@ -291,7 +297,7 @@ public:
                     for (int i = 0; !issuer && i < sk_X509_num(certificates); ++i)
                     {
                         X509* candidate = sk_X509_value(certificates, i);
-                        if (X509_check_issued(candidate, certificate) == X509_V_OK)
+                        if (X509_check_issued(candidate, certificate) == X509_V_OK && X509_verify(certificate, X509_get0_pubkey(candidate)) == 1)
                         {
                             X509_up_ref(candidate);
                             issuer = candidate;
@@ -332,7 +338,7 @@ public:
     /// Asks the OCSP responders of the certificate. The response must answer for
     /// this certificate, be current and signed by the issuer or by a responder the
     /// issuer authorised.
-    static Status getOcspResponse(X509* certificate, X509* issuer, int timeout, QByteArray& response, CertificatePool& responders, QString& errorMessage)
+    static Status getOcspResponse(X509* certificate, X509* issuer, const QDeadlineTimer& budget, int timeout, QByteArray& response, CertificatePool& responders, QString& errorMessage)
     {
         for (const QString& uri : getAccessUris(certificate, NID_ad_OCSP))
         {
@@ -351,7 +357,7 @@ public:
             OPENSSL_free(buffer);
             OCSP_REQUEST_free(ocspRequest);
 
-            const QByteArray data = request(uri, requestData, "application/ocsp-request", PDFLongTermValidation::MAXIMAL_OCSP_SIZE, timeout, errorMessage);
+            const QByteArray data = request(uri, requestData, "application/ocsp-request", PDFLongTermValidation::MAXIMAL_OCSP_SIZE, getRemaining(budget, timeout), errorMessage);
             const unsigned char* pointer = reinterpret_cast<const unsigned char*>(data.constData());
             OCSP_RESPONSE* ocspResponse = data.isEmpty() ? nullptr : d2i_OCSP_RESPONSE(nullptr, &pointer, data.size());
             OCSP_BASICRESP* basic = (ocspResponse && OCSP_response_status(ocspResponse) == OCSP_RESPONSE_STATUS_SUCCESSFUL) ? OCSP_response_get1_basic(ocspResponse) : nullptr;
@@ -363,7 +369,7 @@ public:
             ASN1_GENERALIZEDTIME* thisUpdate = nullptr;
             ASN1_GENERALIZEDTIME* nextUpdate = nullptr;
             if (basic && OCSP_resp_find_status(basic, id, &certificateStatus, &reason, &revocationTime, &thisUpdate, &nextUpdate) == 1 &&
-                OCSP_check_validity(thisUpdate, nextUpdate, 300, MAXIMAL_REVOCATION_AGE) == 1)
+                OCSP_check_validity(thisUpdate, nextUpdate, 300, nextUpdate ? -1 : MAXIMAL_REVOCATION_AGE) == 1)
             {
                 X509_STORE* store = X509_STORE_new();
                 STACK_OF(X509)* issuers = sk_X509_new_null();
@@ -413,11 +419,11 @@ public:
     }
 
     /// Downloads the CRL of the certificate; it must be signed by the issuer
-    static Status getCrl(X509* certificate, X509* issuer, int timeout, QByteArray& crlData, QString& errorMessage)
+    static Status getCrl(X509* certificate, X509* issuer, const QDeadlineTimer& budget, int timeout, QByteArray& crlData, QString& errorMessage)
     {
         for (const QString& uri : getCrlUris(certificate))
         {
-            const QByteArray data = request(uri, QByteArray(), QByteArray(), PDFLongTermValidation::MAXIMAL_CRL_SIZE, timeout, errorMessage);
+            const QByteArray data = request(uri, QByteArray(), QByteArray(), PDFLongTermValidation::MAXIMAL_CRL_SIZE, getRemaining(budget, timeout), errorMessage);
             const unsigned char* pointer = reinterpret_cast<const unsigned char*>(data.constData());
             X509_CRL* crl = data.isEmpty() ? nullptr : d2i_X509_CRL(nullptr, &pointer, data.size());
             QByteArray der = data;
@@ -433,11 +439,10 @@ public:
             }
 
             Status status = Status::Unknown;
-            // A CRL must be current: its next update still to come, its last one not older than a week
+            // A CRL must be current: issued in the past, its next update still to come (RFC 5280)
             const ASN1_TIME* nextUpdate = crl ? X509_CRL_get0_nextUpdate(crl) : nullptr;
             const ASN1_TIME* lastUpdate = crl ? X509_CRL_get0_lastUpdate(crl) : nullptr;
-            const bool isCurrent = nextUpdate && lastUpdate && X509_cmp_current_time(nextUpdate) > 0 &&
-                                   X509_cmp_time(lastUpdate, nullptr) < 0 && QDateTime::currentDateTimeUtc().addSecs(-MAXIMAL_REVOCATION_AGE) < toDateTime(lastUpdate);
+            const bool isCurrent = nextUpdate && lastUpdate && X509_cmp_current_time(nextUpdate) > 0 && X509_cmp_current_time(lastUpdate) < 0;
             if (crl && !isCurrent)
             {
                 errorMessage = PDFLongTermValidation::tr("the CRL of %1 is out of date").arg(uri);
@@ -479,7 +484,7 @@ public:
     }
 };
 
-PDFLongTermValidation::Result PDFLongTermValidation::addValidationData(const QByteArray& signedDocument, const QString& password, int timeoutMilliseconds)
+PDFLongTermValidation::Result PDFLongTermValidation::addValidationData(const QByteArray& signedDocument, const QString& password, const QString& signatureFieldName, int timeoutMilliseconds)
 {
     Result result;
 
@@ -497,19 +502,12 @@ PDFLongTermValidation::Result PDFLongTermValidation::addValidationData(const QBy
     PDFLongTermValidationHelper::CertificatePool pool;
     const PDFForm form = PDFForm::parse(&document, document.getCatalog()->getFormObject());
     const PDFFormFieldSignature* newest = nullptr;
-    PDFInteger newestEnd = -1;
-    form.apply([&newest, &newestEnd](const PDFFormField* field)
+    form.apply([&newest, &signatureFieldName](const PDFFormField* field)
     {
-        if (const PDFFormFieldSignature* signatureField = dynamic_cast<const PDFFormFieldSignature*>(field))
+        const PDFFormFieldSignature* signatureField = dynamic_cast<const PDFFormFieldSignature*>(field);
+        if (signatureField && field->getName(PDFFormField::NameType::FullyQualified) == signatureFieldName)
         {
-            for (const PDFSignature::ByteRange& range : signatureField->getSignature().getByteRanges())
-            {
-                if (range.offset + range.size > newestEnd && !signatureField->getSignature().getContents().isEmpty())
-                {
-                    newestEnd = range.offset + range.size;
-                    newest = signatureField;
-                }
-            }
+            newest = signatureField;
         }
     });
     if (newest)
@@ -545,7 +543,6 @@ PDFLongTermValidation::Result PDFLongTermValidation::addValidationData(const QBy
 
     // All requests together get one minute, at most 32 certificates are walked
     QDeadlineTimer budget(60000);
-    auto getTimeout = [&budget, timeoutMilliseconds]() { return int(qMin<qint64>(timeoutMilliseconds, budget.remainingTime())); };
 
     // The pool grows while it is walked (issuers), so it is walked by index
     for (size_t i = 0; i < pool.certificates.size() && i < 32; ++i)
@@ -572,7 +569,7 @@ PDFLongTermValidation::Result PDFLongTermValidation::addValidationData(const QBy
         }
         if (!issuer)
         {
-            if (X509* fetchedIssuer = PDFLongTermValidationHelper::fetchIssuer(certificate, getTimeout()))
+            if (X509* fetchedIssuer = PDFLongTermValidationHelper::fetchIssuer(certificate, budget, timeoutMilliseconds))
             {
                 pool.add(fetchedIssuer);
                 X509_free(fetchedIssuer);
@@ -595,7 +592,7 @@ PDFLongTermValidation::Result PDFLongTermValidation::addValidationData(const QBy
 
         QString errorMessage;
         QByteArray data;
-        PDFLongTermValidationHelper::Status status = PDFLongTermValidationHelper::getOcspResponse(certificate, issuer, getTimeout(), data, responders, errorMessage);
+        PDFLongTermValidationHelper::Status status = PDFLongTermValidationHelper::getOcspResponse(certificate, issuer, budget, timeoutMilliseconds, data, responders, errorMessage);
         if (status != PDFLongTermValidationHelper::Status::Unknown)
         {
             if (std::find(existing->OCSP.cbegin(), existing->OCSP.cend(), data) == existing->OCSP.cend() && !newOcsps.contains(data))
@@ -609,7 +606,7 @@ PDFLongTermValidation::Result PDFLongTermValidation::addValidationData(const QBy
         QString crlErrorMessage;
         QByteArray crlData;
         const PDFLongTermValidationHelper::Status crlStatus = budget.hasExpired() ? PDFLongTermValidationHelper::Status::Unknown
-                                                                                  : PDFLongTermValidationHelper::getCrl(certificate, issuer, getTimeout(), crlData, crlErrorMessage);
+                                                                                  : PDFLongTermValidationHelper::getCrl(certificate, issuer, budget, timeoutMilliseconds, crlData, crlErrorMessage);
         if (crlStatus != PDFLongTermValidationHelper::Status::Unknown &&
             std::find(existing->CRL.cbegin(), existing->CRL.cend(), crlData) == existing->CRL.cend() && !newCrls.contains(crlData))
         {
@@ -633,6 +630,11 @@ PDFLongTermValidation::Result PDFLongTermValidation::addValidationData(const QBy
         {
             result.revokedCertificates << subject;
         }
+    }
+
+    if (pool.certificates.size() > 32)
+    {
+        result.warnings << tr("%1 certificates were not checked (at most 32 are).").arg(pool.certificates.size() - 32);
     }
 
     QByteArrayList certificates = pool.encoded;
@@ -768,10 +770,10 @@ bool PDFLongTermValidation::addDocumentTimestamp(const QByteArray& document,
     return true;
 }
 
-PDFLongTermValidation::Extension PDFLongTermValidation::extend(const QByteArray& signedDocument, const QString& password, const PDFSignatureFactory::TimestampSettings& settings)
+PDFLongTermValidation::Extension PDFLongTermValidation::extend(const QByteArray& signedDocument, const QString& password, const QString& signatureFieldName, const PDFSignatureFactory::TimestampSettings& settings)
 {
     Extension extension;
-    extension.validation = addValidationData(signedDocument, password, settings.timeoutMilliseconds);
+    extension.validation = addValidationData(signedDocument, password, signatureFieldName, settings.timeoutMilliseconds);
     extension.document = extension.validation.isOK() ? extension.validation.document : signedDocument;
 
     QByteArray timestamped;

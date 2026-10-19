@@ -156,7 +156,7 @@ private:
                         const pdf::PDFLongTermValidation::Extension* extension = nullptr, const QByteArray& signedDocument = QByteArray());
 
     /// Extends the signed document to PAdES B-LTA; on an exception the document stays as signed
-    static std::optional<pdf::PDFLongTermValidation::Extension> extendSignature(QByteArray& signedDocument, const QString& password,
+    static std::optional<pdf::PDFLongTermValidation::Extension> extendSignature(QByteArray& signedDocument, const QString& password, const QString& signatureFieldName,
                                                                               const pdf::PDFSignatureFactory::TimestampSettings& settings);
 
     std::array<QAction*, LastAction> m_actions;

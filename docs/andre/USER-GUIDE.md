@@ -70,9 +70,10 @@ The signatures are **PAdES** (ETSI EN 319 142-1, `ETSI.CAdES.detached`), the Eur
 standard for signed PDFs, which Acrobat Reader and the accredited providers' tools
 check. The save dialog says which PAdES level the saved file reached (B-B to B-LTA).
 The program's own signature panel shows "bytes not covered" for a signature followed by
-validation data or a timestamp; that is expected, the report says what those bytes are.
-If the timestamp authority cannot be reached (offline), the program offers to sign
-without a timestamp.
+validation data or a timestamp; that is expected: the report shows how many bytes follow
+the signature and lists the later signatures and timestamps.
+If the timestamp authority cannot be reached (offline), Sign Digitally and Sign Contract
+offer to sign without a timestamp (the contract pack flow reports the failure instead).
 
 The **verification stamp** under the signature shows who signed, when, how the
 document is locked, your certificate's fingerprint, its issuer and serial number, and

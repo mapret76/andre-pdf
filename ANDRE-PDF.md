@@ -53,13 +53,13 @@ a third party to confirm the ID of the certificate and author"; "version control
 new versions, download and install when the user agrees ... summary of what changes ... full
 version history"; "an independent reviewer after every task ... functionality and security"):
 - [x] R0 Independent review of A1-A16 (two reviewers, fresh context), findings fixed; fixes verified (R0-verification.md), its findings fixed (R1-fixes.md)
-- [x] B1 PAdES signatures: ETSI.CAdES.detached with signing-certificate-v2, timestamp by default, LTV (DSS: chain, OCSP/CRL), document timestamp (reviewed R2-A, fixed; Windows-store path and Acrobat check are a gate below)
+- [~] B1 PAdES signatures: ETSI.CAdES.detached with signing-certificate-v2, timestamp by default, LTV (DSS: chain, OCSP/CRL), document timestamp (reviewed R2-A and R3, fixed; ticked after the B1 gate below: Windows-store / token signing and Acrobat check)
 - [x] B2 "Verify Signatures" report for third parties: signer identity (subject, issuer, serial, fingerprints), chain, revocation, integrity, lock, AES (accredited) or ordinary electronic signature (reviewed R2-B, fixed)
 - [x] B3 Stamp and QR carry issuer and serial of the certificate (reviewed R2-A, fixed)
 - [x] B4 Versions: Andre PDF version number, CHANGELOG.md, Help -> Version History, "What's new" after an update (reviewed: B45-review.md, fixed: R1-fixes.md)
 - [x] B5 Updates: check (start-up + Help), summary of every newer version, download, verify the signed manifest (ECDSA P-256, key in a vault file per Andre) and SHA-256, install on consent; release script (reviewed: B45-review.md, fixed: R1-fixes.md)
 - [x] R2 Independent review of B1-B3 and of the R1 fixes, findings fixed (R2-A.md, R2-B.md, R2-fixes.md)
-- [ ] R3 Independent verification of the R2 fixes
+- [x] R3 Independent verification of the R2 fixes (R3.md), its findings fixed (R3-fixes.md)
 - [ ] B6 First release v1.0.0: Windows_MSI on master, then `tools/andre-release.sh <run>` on andre-vault (Andre types "yes")
 Every task of queue B gets an independent review before it is ticked (`docs/andre/reviews/`).
 

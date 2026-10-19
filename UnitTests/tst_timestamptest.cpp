@@ -1622,7 +1622,7 @@ void TimestampTest::longTermDocumentTimestamp()
 
     // The whole extension: validation data (a self-signed certificate needs no
     // revocation data), then the document timestamp; the saved file passes the check
-    const PDFLongTermValidation::Extension extension = PDFLongTermValidation::extend(signedDocument, QString(), getTimestampSettings());
+    const PDFLongTermValidation::Extension extension = PDFLongTermValidation::extend(signedDocument, QString(), "Signature", getTimestampSettings());
     QVERIFY2(extension.validation.isOK(), qPrintable(extension.validation.error));
     QVERIFY2(!extension.timestampFieldName.isEmpty(), qPrintable(extension.timestampError));
     QVERIFY(PDFLongTermValidation::checkExtendedFile(extension.document, signedDocument, "Signature", extension.timestampFieldName, QString()).isOK());

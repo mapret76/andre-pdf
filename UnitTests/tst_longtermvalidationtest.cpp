@@ -38,6 +38,7 @@
 #include <openssl/cms.h>
 #include <openssl/evp.h>
 #include <openssl/ocsp.h>
+#include <openssl/ess.h>
 #include <openssl/pkcs12.h>
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
@@ -127,6 +128,34 @@ public:
     }
 
     QByteArray getRoot() const { return toDer(m_root); }
+
+    /// CAdES signature whose signing-certificate-v2 attribute names the whole chain
+    /// (signer and root, RFC 5035)
+    QByteArray signWithChainAttribute(X509* certificate, const QByteArray& data) const
+    {
+        BIO* input = BIO_new_mem_buf(data.constData(), int(data.size()));
+        CMS_ContentInfo* cms = CMS_sign(nullptr, nullptr, nullptr, input, CMS_DETACHED | CMS_BINARY | CMS_PARTIAL);
+        CMS_SignerInfo* signerInfo = CMS_add1_signer(cms, certificate, m_userKey, EVP_sha256(), CMS_BINARY | CMS_PARTIAL | CMS_NOSMIMECAP);
+        STACK_OF(X509)* chain = sk_X509_new_null();
+        sk_X509_push(chain, m_root);
+        ESS_SIGNING_CERT_V2* attribute = OSSL_ESS_signing_cert_v2_new_init(EVP_sha256(), certificate, chain, 1);
+        unsigned char* der = nullptr;
+        const int derLength = i2d_ESS_SIGNING_CERT_V2(attribute, &der);
+        CMS_signed_add1_attr_by_NID(signerInfo, NID_id_smime_aa_signingCertificateV2, V_ASN1_SEQUENCE, der, derLength);
+        OPENSSL_free(der);
+        ESS_SIGNING_CERT_V2_free(attribute);
+        sk_X509_free(chain);
+        CMS_add1_cert(cms, m_root);
+        CMS_final(cms, input, nullptr, CMS_DETACHED | CMS_BINARY);
+        BIO_free(input);
+
+        unsigned char* buffer = nullptr;
+        const int size = i2d_CMS_ContentInfo(cms, &buffer);
+        QByteArray result(reinterpret_cast<const char*>(buffer), size);
+        OPENSSL_free(buffer);
+        CMS_ContentInfo_free(cms);
+        return result;
+    }
 
     /// CAdES signature of the data whose certificate set holds a decoy first: a copy of the
     /// signer's certificate (same issuer, serial and key) with another name, signed by a
@@ -392,6 +421,8 @@ private slots:
     void verificationReportOfChangedFile();
     void verificationReportIgnoresDecoyCertificate();
     void verificationReportGapInSignedRange();
+    void verificationReportChainInSigningCertificate();
+    void onlyTheNamedSignatureIsWalked();
 
 private:
     QByteArray sign(X509* certificate, bool withRoot, const std::optional<QString>& encryptionPassword = std::nullopt);
@@ -504,7 +535,7 @@ void LongTermValidationTest::validationDataFromOcsp()
     const QByteArray signedDocument = sign(m_good, true);
     QVERIFY(!signedDocument.isEmpty());
 
-    const PDFLongTermValidation::Result result = PDFLongTermValidation::addValidationData(signedDocument, QString(), 5000);
+    const PDFLongTermValidation::Result result = PDFLongTermValidation::addValidationData(signedDocument, QString(), "Signature", 5000);
     QVERIFY2(result.isOK(), qPrintable(result.error));
     QVERIFY2(result.warnings.isEmpty(), qPrintable(result.warnings.join('\n')));
     QVERIFY(result.revokedCertificates.isEmpty());
@@ -528,7 +559,7 @@ void LongTermValidationTest::validationDataFallsBackToCrl()
 {
     const QByteArray signedDocument = sign(m_crlOnly, true);
     QVERIFY(!signedDocument.isEmpty());
-    const PDFLongTermValidation::Result result = PDFLongTermValidation::addValidationData(signedDocument, QString(), 5000);
+    const PDFLongTermValidation::Result result = PDFLongTermValidation::addValidationData(signedDocument, QString(), "Signature", 5000);
     QVERIFY2(result.isOK(), qPrintable(result.error));
     QCOMPARE(result.ocspCount, 0);
     QCOMPARE(result.crlCount, 1);
@@ -536,7 +567,7 @@ void LongTermValidationTest::validationDataFallsBackToCrl()
 
     // The responder is down: the CRL is used instead
     m_authority.ocspBehaviour = TestCertificationAuthority::OcspBehaviour::Unavailable;
-    const PDFLongTermValidation::Result fallback = PDFLongTermValidation::addValidationData(sign(m_good, true), QString(), 5000);
+    const PDFLongTermValidation::Result fallback = PDFLongTermValidation::addValidationData(sign(m_good, true), QString(), "Signature", 5000);
     QVERIFY(fallback.isOK());
     QCOMPARE(fallback.ocspCount, 0);
     QCOMPARE(fallback.crlCount, 1);
@@ -546,7 +577,7 @@ void LongTermValidationTest::issuerIsFetched()
 {
     const QByteArray signedDocument = sign(m_good, false);
     QVERIFY(!signedDocument.isEmpty());
-    const PDFLongTermValidation::Result result = PDFLongTermValidation::addValidationData(signedDocument, QString(), 5000);
+    const PDFLongTermValidation::Result result = PDFLongTermValidation::addValidationData(signedDocument, QString(), "Signature", 5000);
     QVERIFY2(result.isOK(), qPrintable(result.error));
     QVERIFY2(result.warnings.isEmpty(), qPrintable(result.warnings.join('\n')));
     QCOMPARE(result.certificateCount, 2);
@@ -558,12 +589,12 @@ void LongTermValidationTest::revokedCertificateIsReported()
     m_authority.revokedSerial = 12;
     const QByteArray signedDocument = sign(m_revoked, true);
     QVERIFY(!signedDocument.isEmpty());
-    PDFLongTermValidation::Result result = PDFLongTermValidation::addValidationData(signedDocument, QString(), 5000);
+    PDFLongTermValidation::Result result = PDFLongTermValidation::addValidationData(signedDocument, QString(), "Signature", 5000);
     QVERIFY(result.isOK());
     QCOMPARE(result.revokedCertificates.size(), 1);
 
     m_authority.ocspBehaviour = TestCertificationAuthority::OcspBehaviour::Unavailable;
-    result = PDFLongTermValidation::addValidationData(signedDocument, QString(), 5000);
+    result = PDFLongTermValidation::addValidationData(signedDocument, QString(), "Signature", 5000);
     QCOMPARE(result.revokedCertificates.size(), 1);
     QCOMPARE(result.crlCount, 1);
 }
@@ -572,7 +603,7 @@ void LongTermValidationTest::foreignOcspAnswerIsRejected()
 {
     m_authority.ocspBehaviour = TestCertificationAuthority::OcspBehaviour::ForeignSigner;
     m_authority.isCrlAvailable = false;
-    const PDFLongTermValidation::Result result = PDFLongTermValidation::addValidationData(sign(m_good, true), QString(), 5000);
+    const PDFLongTermValidation::Result result = PDFLongTermValidation::addValidationData(sign(m_good, true), QString(), "Signature", 5000);
     QVERIFY(result.isOK());
     QCOMPARE(result.ocspCount, 0);
     QCOMPARE(result.crlCount, 0);
@@ -583,7 +614,7 @@ void LongTermValidationTest::staleRevocationDataIsRefused()
 {
     // Review R2-A M1: an OCSP answer a month old (no next update) and an expired CRL
     m_authority.isStale = true;
-    const PDFLongTermValidation::Result result = PDFLongTermValidation::addValidationData(sign(m_good, true), QString(), 5000);
+    const PDFLongTermValidation::Result result = PDFLongTermValidation::addValidationData(sign(m_good, true), QString(), "Signature", 5000);
     QVERIFY(result.isOK());
     QCOMPARE(result.ocspCount, 0);
     QCOMPARE(result.crlCount, 0);
@@ -592,12 +623,12 @@ void LongTermValidationTest::staleRevocationDataIsRefused()
 
 void LongTermValidationTest::existingStoreIsKept()
 {
-    const PDFLongTermValidation::Result first = PDFLongTermValidation::addValidationData(sign(m_good, true), QString(), 5000);
+    const PDFLongTermValidation::Result first = PDFLongTermValidation::addValidationData(sign(m_good, true), QString(), "Signature", 5000);
     QVERIFY(first.isOK());
 
     // The second time (no OCSP): the certificates and the CRL are there already
     m_authority.ocspBehaviour = TestCertificationAuthority::OcspBehaviour::Unavailable;
-    const PDFLongTermValidation::Result second = PDFLongTermValidation::addValidationData(first.document, QString(), 5000);
+    const PDFLongTermValidation::Result second = PDFLongTermValidation::addValidationData(first.document, QString(), "Signature", 5000);
     QVERIFY(second.isOK());
     QCOMPARE(second.certificateCount, 0);
     QCOMPARE(second.crlCount, 0);
@@ -615,9 +646,9 @@ void LongTermValidationTest::encryptedDocument()
     const QByteArray signedDocument = sign(m_good, true, QString("secret"));
     QVERIFY(!signedDocument.isEmpty());
 
-    QVERIFY(!PDFLongTermValidation::addValidationData(signedDocument, QString("wrong"), 5000).isOK());
+    QVERIFY(!PDFLongTermValidation::addValidationData(signedDocument, QString("wrong"), "Signature", 5000).isOK());
 
-    const PDFLongTermValidation::Result result = PDFLongTermValidation::addValidationData(signedDocument, QString("secret"), 5000);
+    const PDFLongTermValidation::Result result = PDFLongTermValidation::addValidationData(signedDocument, QString("secret"), "Signature", 5000);
     QVERIFY2(result.isOK(), qPrintable(result.error));
     const PDFDocument document = read(result.document, "secret");
     QCOMPARE(document.getCatalog()->getDocumentSecurityStore().getMasterItem()->OCSP.size(), size_t(1));
@@ -635,7 +666,7 @@ void LongTermValidationTest::extensionWithoutTimestampAuthority()
     PDFSignatureFactory::TimestampSettings settings;
     settings.url = "http://127.0.0.1:1/";
     settings.timeoutMilliseconds = 2000;
-    const PDFLongTermValidation::Extension extension = PDFLongTermValidation::extend(signedDocument, QString(), settings);
+    const PDFLongTermValidation::Extension extension = PDFLongTermValidation::extend(signedDocument, QString(), "Signature", settings);
     QVERIFY(extension.validation.isOK());
     QVERIFY(extension.timestampFieldName.isEmpty());
     QVERIFY(!extension.timestampError.isEmpty());
@@ -653,7 +684,7 @@ void LongTermValidationTest::extensionWithoutTimestampAuthority()
 
 void LongTermValidationTest::verificationReport()
 {
-    const PDFLongTermValidation::Result extended = PDFLongTermValidation::addValidationData(sign(m_good, true), QString(), 5000);
+    const PDFLongTermValidation::Result extended = PDFLongTermValidation::addValidationData(sign(m_good, true), QString(), "Signature", 5000);
     QVERIFY(extended.isOK());
 
     const PDFSignatureReport::Report report = PDFSignatureReport::create(extended.document, "contract.pdf", QString(), false);
@@ -685,7 +716,7 @@ void LongTermValidationTest::verificationReport()
 
     // A revoked signer and a name with markup: the status is reported, the markup escaped
     m_authority.revokedSerial = 12;
-    const PDFLongTermValidation::Result revoked = PDFLongTermValidation::addValidationData(sign(m_revoked, true), QString(), 5000);
+    const PDFLongTermValidation::Result revoked = PDFLongTermValidation::addValidationData(sign(m_revoked, true), QString(), "Signature", 5000);
     QCOMPARE(PDFSignatureReport::create(revoked.document, "r.pdf", QString(), false).signatures.front().revocation, PDFSignatureReport::Revocation::Revoked);
 
     const PDFSignatureReport::Report hostile = PDFSignatureReport::create(sign(m_hostileName, true), "<x>.pdf", QString(), false);
@@ -775,6 +806,64 @@ void LongTermValidationTest::verificationReportGapInSignedRange()
     QCOMPARE(report.signatures.size(), size_t(1));
     QVERIFY(!report.signatures.front().isIntegrityValid);
     QVERIFY(!report.signatures.front().isCoveringWholeFile);
+}
+
+void LongTermValidationTest::verificationReportChainInSigningCertificate()
+{
+    // Review R3 N2: the attribute names the signer and its root
+    PDFDocumentBuilder builder;
+    const PDFObjectReference page = builder.appendPage(QRectF(0, 0, 595, 842));
+    const PDFDocument document = builder.build();
+    PDFDocumentSigner::Parameters parameters;
+    parameters.document = &document;
+    parameters.signFunction = [this](const QByteArray& data, QByteArray& result) { result = m_authority.signWithChainAttribute(m_good, data); return !result.isEmpty(); };
+    parameters.createSignatureFieldFunction = [page](PDFDocumentBuilder& fieldBuilder, PDFObjectReference signatureDictionary)
+    {
+        return fieldBuilder.createSignatureField("Signature", signatureDictionary, page);
+    };
+    QByteArray signedDocument;
+    QCOMPARE(PDFDocumentSigner::sign(parameters, signedDocument), PDFDocumentSigner::Result::OK);
+
+    const PDFSignatureReport::Report report = PDFSignatureReport::create(signedDocument, "chain.pdf", QString(), false);
+    QCOMPARE(report.signatures.size(), size_t(1));
+    QVERIFY2(report.signatures.front().isIntegrityValid, qPrintable(report.signatures.front().errors.join('\n')));
+    QVERIFY(!report.signatures.front().chain.empty());
+    QCOMPARE(report.signatures.front().chain.front().commonName, QString("Andre PDF test signer"));
+}
+
+void LongTermValidationTest::onlyTheNamedSignatureIsWalked()
+{
+    // Review R3 N1: a revoked first signer, then a good countersigner; only the named
+    // signature's chain is checked, whatever the byte ranges in the file say
+    m_authority.revokedSerial = 12;
+    const QByteArray first = sign(m_revoked, true);
+    QVERIFY(!first.isEmpty());
+
+    bool offered = false;
+    PDFDocumentReader reader(nullptr, [&](bool* ok) { *ok = !offered; offered = true; return QString(); }, false, false);
+    const PDFDocument document = reader.readFromBuffer(first);
+    PDFCertificateEntry entry;
+    entry.pkcs12 = m_authority.createPkcs12(m_good, true);
+    PDFDocumentSigner::Parameters parameters;
+    parameters.document = &document;
+    parameters.originalDocumentData = first;
+    parameters.signFunction = [entry](const QByteArray& data, QByteArray& result) { return PDFSignatureFactory::sign(entry, "test", data, result); };
+    const PDFObjectReference page = document.getCatalog()->getPage(0)->getPageReference();
+    parameters.createSignatureFieldFunction = [page](PDFDocumentBuilder& fieldBuilder, PDFObjectReference signatureDictionary)
+    {
+        return fieldBuilder.createSignatureField("Second", signatureDictionary, page);
+    };
+    QByteArray both;
+    QCOMPARE(PDFDocumentSigner::sign(parameters, both), PDFDocumentSigner::Result::OK);
+
+    const PDFLongTermValidation::Result second = PDFLongTermValidation::addValidationData(both, QString(), "Second", 5000);
+    QVERIFY(second.isOK());
+    QVERIFY(second.revokedCertificates.isEmpty());
+
+    const PDFLongTermValidation::Result firstOnly = PDFLongTermValidation::addValidationData(both, QString(), "Signature", 5000);
+    QCOMPARE(firstOnly.revokedCertificates.size(), 1);
+
+    QVERIFY(!PDFLongTermValidation::addValidationData(both, QString(), "Missing", 5000).isOK());
 }
 
 QTEST_MAIN(LongTermValidationTest)

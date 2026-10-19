@@ -68,7 +68,9 @@ public:
     /// \param signedDocument Bytes of the signed document
     /// \param password Password opening the document, when it is encrypted
     /// \param timeoutMilliseconds Limit of one network request
-    static Result addValidationData(const QByteArray& signedDocument, const QString& password, int timeoutMilliseconds = 15000);
+    /// \param signatureFieldName Field of the signature just made: only its certificates (and
+    ///        those of its timestamp) are walked, never those of other parties' signatures
+    static Result addValidationData(const QByteArray& signedDocument, const QString& password, const QString& signatureFieldName, int timeoutMilliseconds = 15000);
 
     /// Adds a document timestamp (ETSI.RFC3161) as an incremental update. Returns
     /// false and sets \p errorMessage, when it was not added.
@@ -98,7 +100,7 @@ public:
 
     /// Adds the validation data, then the document timestamp over it. Each step
     /// that fails is skipped and reported; the signed bytes are never changed.
-    static Extension extend(const QByteArray& signedDocument, const QString& password, const PDFSignatureFactory::TimestampSettings& settings);
+    static Extension extend(const QByteArray& signedDocument, const QString& password, const QString& signatureFieldName, const PDFSignatureFactory::TimestampSettings& settings);
 
     /// Checks a saved file, which must be the signed document followed by its
     /// extension: the signature is checked in the signed document, the saved file

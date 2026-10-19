@@ -733,7 +733,7 @@ bool SignaturePlugin::onSignDigitally()
         std::optional<pdf::PDFLongTermValidation::Extension> extension;
         if (dialog.isLongTermValidation() && !isTimestampSkipped)
         {
-            extension = extendSignature(signedDocument, documentPassword, timestampSettings);
+            extension = extendSignature(signedDocument, documentPassword, signatureName, timestampSettings);
         }
 
         QString fileName = QFileDialog::getSaveFileName(m_dataExchangeInterface->getMainWindow(), tr("Save Signed Document"), getSignedFileName(), tr("Portable Document (*.pdf);;All files (*.*)"));
@@ -754,14 +754,14 @@ bool SignaturePlugin::onSignDigitally()
     }
 }
 
-std::optional<pdf::PDFLongTermValidation::Extension> SignaturePlugin::extendSignature(QByteArray& signedDocument, const QString& password,
+std::optional<pdf::PDFLongTermValidation::Extension> SignaturePlugin::extendSignature(QByteArray& signedDocument, const QString& password, const QString& signatureFieldName,
                                                                                     const pdf::PDFSignatureFactory::TimestampSettings& settings)
 {
     std::optional<pdf::PDFLongTermValidation::Extension> extension;
     QApplication::setOverrideCursor(Qt::WaitCursor);
     try
     {
-        extension = pdf::PDFLongTermValidation::extend(signedDocument, password, settings);
+        extension = pdf::PDFLongTermValidation::extend(signedDocument, password, signatureFieldName, settings);
         signedDocument = extension->document;
     }
     catch (const std::exception&)
@@ -1283,7 +1283,7 @@ void SignaturePlugin::onSignPack()
         std::optional<pdf::PDFLongTermValidation::Extension> extension;
         if (signDialog.isLongTermValidation())
         {
-            extension = extendSignature(signedDocument, parameters.encryptionUserPassword.value_or(QString()), timestampSettings);
+            extension = extendSignature(signedDocument, parameters.encryptionUserPassword.value_or(QString()), fieldName, timestampSettings);
         }
 
         // Existing files are never overwritten

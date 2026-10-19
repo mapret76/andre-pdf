@@ -128,7 +128,7 @@ public:
     /// The certificate is the one the signer signed with: it is named by the signed
     /// signing-certificate(-v2) attribute (its hash), and its key verifies the signed
     /// attributes. Issuer and serial alone can be copied into a decoy certificate.
-    static bool isSignerCertificate(CMS_SignerInfo* signerInfo, X509* certificate)
+    static bool isSignerCertificate(CMS_SignerInfo* signerInfo, X509* certificate, STACK_OF(X509)* certificates)
     {
         if (CMS_SignerInfo_cert_cmp(signerInfo, certificate) != 0)
         {
@@ -137,8 +137,17 @@ public:
 
         ESS_SIGNING_CERT* signingCertificate = getSignedAttribute<ESS_SIGNING_CERT>(signerInfo, NID_id_smime_aa_signingCertificate, &d2i_ESS_SIGNING_CERT);
         ESS_SIGNING_CERT_V2* signingCertificateV2 = getSignedAttribute<ESS_SIGNING_CERT_V2>(signerInfo, NID_id_smime_aa_signingCertificateV2, &d2i_ESS_SIGNING_CERT_V2);
+        // The attribute may name the chain as well (RFC 5035): the signer first, then
+        // every other certificate of the signature
         STACK_OF(X509)* chain = sk_X509_new_null();
         sk_X509_push(chain, certificate);
+        for (int i = 0; i < sk_X509_num(certificates); ++i)
+        {
+            if (X509_cmp(sk_X509_value(certificates, i), certificate) != 0)
+            {
+                sk_X509_push(chain, sk_X509_value(certificates, i));
+            }
+        }
         bool isSigner = OSSL_ESS_check_signing_certs(signingCertificate, signingCertificateV2, chain, 0) > 0;
         sk_X509_free(chain);
         ESS_SIGNING_CERT_free(signingCertificate);
@@ -166,7 +175,7 @@ public:
         {
             X509* certificate = sk_X509_value(certificates, i);
             pool.add(certificate);
-            if (!signer && signerInfo && isSignerCertificate(signerInfo, certificate))
+            if (!signer && signerInfo && isSignerCertificate(signerInfo, certificate, certificates))
             {
                 for (X509* pooled : pool.certificates)
                 {
@@ -487,10 +496,10 @@ PDFSignatureReport::Report PDFSignatureReport::create(const QByteArray& data, co
         item.fieldName = field->getName(PDFFormField::NameType::FullyQualified);
         item.subfilter = signature.getSubfilter();
         item.isDocumentTimestamp = signature.getType() == PDFSignature::Type::DocTimeStamp || item.subfilter == "ETSI.RFC3161";
-        item.name = signature.getName();
-        item.reason = signature.getReason();
-        item.location = signature.getLocation();
-        item.contactInfo = signature.getContactInfo();
+        item.name = PDFSignatureReportHelper::clean(signature.getName());
+        item.reason = PDFSignatureReportHelper::clean(signature.getReason());
+        item.location = PDFSignatureReportHelper::clean(signature.getLocation());
+        item.contactInfo = PDFSignatureReportHelper::clean(signature.getContactInfo());
         item.claimedTime = signature.getSigningDateTime();
         for (const PDFSignature::ByteRange& range : signature.getByteRanges())
         {

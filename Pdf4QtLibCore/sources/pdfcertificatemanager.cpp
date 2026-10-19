@@ -28,6 +28,7 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QNetworkProxyFactory>
 #include <QRandomGenerator>
 #include <QStandardPaths>
 #include <QTimer>
@@ -415,6 +416,7 @@ bool postTimestampRequest(const QByteArray& requestData,
 
     const int timeout = (timeoutMilliseconds > 0) ? timeoutMilliseconds : 15000;
 
+    QNetworkProxyFactory::setUseSystemConfiguration(true);
     QNetworkAccessManager networkAccessManager;
     QNetworkRequest networkRequest(timestampUrl);
     networkRequest.setHeader(QNetworkRequest::ContentTypeHeader, QByteArray("application/timestamp-query"));
