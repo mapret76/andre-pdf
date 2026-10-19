@@ -3,6 +3,14 @@
 Every version has a one-line summary (shown when an update is offered) and its
 changes. Newest first. The release script refuses a version without an entry here.
 
+## 1.0.1 - 2026-10-19
+
+Summary: Signature Verification Report reads more signatures of other programs correctly, and small fixes from the independent review.
+
+- Verification report: a signature whose certificate attribute names the whole chain is read correctly, also when the chain is not in the signature.
+- Verification report: names of fields and timestamp authorities are shown without hidden control characters.
+- Long-term validation: five minutes of clock difference allowed for revocation lists.
+
 ## 1.0.0 - 2026-10-19
 
 Summary: First release of Andre PDF: certified PAdES contract signing with long-term validation and a verification report, signature library, initials, contract packs, size reduction, Word and Excel export, sharing, redline compare and font-faithful editing of scans.

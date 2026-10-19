@@ -38,7 +38,7 @@ add_compile_definitions(PDF4QT_PROJECT_VERSION="${PDF4QT_VERSION}")
 
 # Version of Andre PDF (the fork), the version users and the installer see; the
 # engine keeps the PDF4QT version. Every release raises it and has a CHANGELOG.md entry.
-set(ANDRE_PDF_VERSION 1.0.0)
+set(ANDRE_PDF_VERSION 1.0.1)
 add_compile_definitions(ANDRE_PDF_VERSION="${ANDRE_PDF_VERSION}")
 add_compile_definitions(QT_NO_EMIT)
 

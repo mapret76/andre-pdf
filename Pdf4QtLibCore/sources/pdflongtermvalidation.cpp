@@ -46,6 +46,7 @@
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 
+#include <ctime>
 #include <memory>
 
 #include "pdfdbgheap.h"
@@ -442,7 +443,10 @@ public:
             // A CRL must be current: issued in the past, its next update still to come (RFC 5280)
             const ASN1_TIME* nextUpdate = crl ? X509_CRL_get0_nextUpdate(crl) : nullptr;
             const ASN1_TIME* lastUpdate = crl ? X509_CRL_get0_lastUpdate(crl) : nullptr;
-            const bool isCurrent = nextUpdate && lastUpdate && X509_cmp_current_time(nextUpdate) > 0 && X509_cmp_current_time(lastUpdate) < 0;
+            // five minutes of clock difference allowed, as for OCSP answers
+            time_t earlier = time(nullptr) - 300;
+            time_t later = time(nullptr) + 300;
+            const bool isCurrent = nextUpdate && lastUpdate && X509_cmp_time(nextUpdate, &earlier) > 0 && X509_cmp_time(lastUpdate, &later) < 0;
             if (crl && !isCurrent)
             {
                 errorMessage = PDFLongTermValidation::tr("the CRL of %1 is out of date").arg(uri);

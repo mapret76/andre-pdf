@@ -60,6 +60,7 @@ version history"; "an independent reviewer after every task ... functionality an
 - [x] B5 Updates: check (start-up + Help), summary of every newer version, download, verify the signed manifest (ECDSA P-256, key in a vault file per Andre) and SHA-256, install on consent; release script (reviewed: B45-review.md, fixed: R1-fixes.md)
 - [x] R2 Independent review of B1-B3 and of the R1 fixes, findings fixed (R2-A.md, R2-B.md, R2-fixes.md)
 - [x] R3 Independent verification of the R2 fixes (R3.md), its findings fixed (R3-fixes.md)
+- [x] R4 Independent verification of the R3 fixes (R4.md), its findings fixed (R4-fixes.md, version 1.0.1)
 - [ ] B6 First release v1.0.0: Windows_MSI on master, then `tools/andre-release.sh <run>` on andre-vault (Andre types "yes")
 Every task of queue B gets an independent review before it is ticked (`docs/andre/reviews/`).
 

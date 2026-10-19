@@ -121,8 +121,56 @@ public:
         {
             return nullptr;
         }
-        const unsigned char* pointer = value->value.sequence->data;
-        return decode(nullptr, &pointer, value->value.sequence->length);
+        // Only the first certificate ID names the signer (RFC 5035); the others name
+        // the chain, whose certificates need not be in the signature
+        const QByteArray reduced = getFirstCertificateIdOnly(value->value.sequence->data, value->value.sequence->length);
+        const unsigned char* pointer = reinterpret_cast<const unsigned char*>(reduced.constData());
+        return reduced.isEmpty() ? nullptr : decode(nullptr, &pointer, reduced.size());
+    }
+
+    /// DER of a SEQUENCE { SEQUENCE { the first element } } from SEQUENCE { SEQUENCE OF x, ... }
+    /// (signing-certificate and signing-certificate-v2 with the first certificate ID only)
+    static QByteArray getFirstCertificateIdOnly(const unsigned char* data, long length)
+    {
+        auto encodeSequence = [](const QByteArray& content)
+        {
+            QByteArray result(1, char(0x30));
+            const qsizetype size = content.size();
+            if (size < 128)
+            {
+                result += char(size);
+            }
+            else
+            {
+                QByteArray lengthBytes;
+                for (qsizetype value = size; value > 0; value >>= 8)
+                {
+                    lengthBytes.prepend(char(value & 0xFF));
+                }
+                result += char(0x80 | lengthBytes.size());
+                result += lengthBytes;
+            }
+            return result + content;
+        };
+
+        QByteArray result;
+        const unsigned char* pointer = data;
+        STACK_OF(ASN1_TYPE)* outer = d2i_ASN1_SEQUENCE_ANY(nullptr, &pointer, length);
+        ASN1_TYPE* certificates = sk_ASN1_TYPE_num(outer) > 0 ? sk_ASN1_TYPE_value(outer, 0) : nullptr;
+        if (certificates && certificates->type == V_ASN1_SEQUENCE)
+        {
+            const unsigned char* innerPointer = certificates->value.sequence->data;
+            STACK_OF(ASN1_TYPE)* identifiers = d2i_ASN1_SEQUENCE_ANY(nullptr, &innerPointer, certificates->value.sequence->length);
+            ASN1_TYPE* first = sk_ASN1_TYPE_num(identifiers) > 0 ? sk_ASN1_TYPE_value(identifiers, 0) : nullptr;
+            if (first && first->type == V_ASN1_SEQUENCE)
+            {
+                const QByteArray identifier(reinterpret_cast<const char*>(first->value.sequence->data), first->value.sequence->length);
+                result = encodeSequence(encodeSequence(identifier));
+            }
+            sk_ASN1_TYPE_pop_free(identifiers, ASN1_TYPE_free);
+        }
+        sk_ASN1_TYPE_pop_free(outer, ASN1_TYPE_free);
+        return result;
     }
 
     /// The certificate is the one the signer signed with: it is named by the signed
@@ -137,17 +185,10 @@ public:
 
         ESS_SIGNING_CERT* signingCertificate = getSignedAttribute<ESS_SIGNING_CERT>(signerInfo, NID_id_smime_aa_signingCertificate, &d2i_ESS_SIGNING_CERT);
         ESS_SIGNING_CERT_V2* signingCertificateV2 = getSignedAttribute<ESS_SIGNING_CERT_V2>(signerInfo, NID_id_smime_aa_signingCertificateV2, &d2i_ESS_SIGNING_CERT_V2);
-        // The attribute may name the chain as well (RFC 5035): the signer first, then
-        // every other certificate of the signature
+        // The attribute is reduced to its first certificate ID, which names the signer
+        Q_UNUSED(certificates);
         STACK_OF(X509)* chain = sk_X509_new_null();
         sk_X509_push(chain, certificate);
-        for (int i = 0; i < sk_X509_num(certificates); ++i)
-        {
-            if (X509_cmp(sk_X509_value(certificates, i), certificate) != 0)
-            {
-                sk_X509_push(chain, sk_X509_value(certificates, i));
-            }
-        }
         bool isSigner = OSSL_ESS_check_signing_certs(signingCertificate, signingCertificateV2, chain, 0) > 0;
         sk_X509_free(chain);
         ESS_SIGNING_CERT_free(signingCertificate);
@@ -493,7 +534,8 @@ PDFSignatureReport::Report PDFSignatureReport::create(const QByteArray& data, co
         const PDFSignature& signature = field->getSignature();
 
         Signature item;
-        item.fieldName = field->getName(PDFFormField::NameType::FullyQualified);
+        const QString qualifiedName = field->getName(PDFFormField::NameType::FullyQualified);
+        item.fieldName = PDFSignatureReportHelper::clean(qualifiedName);
         item.subfilter = signature.getSubfilter();
         item.isDocumentTimestamp = signature.getType() == PDFSignature::Type::DocTimeStamp || item.subfilter == "ETSI.RFC3161";
         item.name = PDFSignatureReportHelper::clean(signature.getName());
@@ -510,7 +552,7 @@ PDFSignatureReport::Report PDFSignatureReport::create(const QByteArray& data, co
 
         for (const PDFSignatureVerificationResult& result : results)
         {
-            if (result.getSignatureFieldQualifiedName() == item.fieldName)
+            if (result.getSignatureFieldQualifiedName() == qualifiedName)
             {
                 item.isIntegrityValid = result.isSignatureValid();
                 item.isCertificateTrusted = result.isCertificateValid();
@@ -567,13 +609,13 @@ PDFSignatureReport::Report PDFSignatureReport::create(const QByteArray& data, co
             PDFSignatureReportHelper::Pool tokenPool;
             if (X509* authority = PDFSignatureReportHelper::addCertificates(tokenCms, tokenPool))
             {
-                item.timestampAuthority = PDFSignatureReportHelper::printName(X509_get_subject_name(authority));
+                item.timestampAuthority = PDFSignatureReportHelper::clean(PDFSignatureReportHelper::printName(X509_get_subject_name(authority)));
             }
             CMS_ContentInfo_free(tokenCms);
         }
         else if (item.isDocumentTimestamp && signers[i])
         {
-            item.timestampAuthority = PDFSignatureReportHelper::printName(X509_get_subject_name(signers[i]));
+            item.timestampAuthority = PDFSignatureReportHelper::clean(PDFSignatureReportHelper::printName(X509_get_subject_name(signers[i])));
         }
 
         // PAdES baseline level (ETSI EN 319 142-1)

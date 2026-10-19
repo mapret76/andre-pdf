@@ -131,7 +131,7 @@ public:
 
     /// CAdES signature whose signing-certificate-v2 attribute names the whole chain
     /// (signer and root, RFC 5035)
-    QByteArray signWithChainAttribute(X509* certificate, const QByteArray& data) const
+    QByteArray signWithChainAttribute(X509* certificate, const QByteArray& data, bool withRoot) const
     {
         BIO* input = BIO_new_mem_buf(data.constData(), int(data.size()));
         CMS_ContentInfo* cms = CMS_sign(nullptr, nullptr, nullptr, input, CMS_DETACHED | CMS_BINARY | CMS_PARTIAL);
@@ -145,7 +145,10 @@ public:
         OPENSSL_free(der);
         ESS_SIGNING_CERT_V2_free(attribute);
         sk_X509_free(chain);
-        CMS_add1_cert(cms, m_root);
+        if (withRoot)
+        {
+            CMS_add1_cert(cms, m_root);
+        }
         CMS_final(cms, input, nullptr, CMS_DETACHED | CMS_BINARY);
         BIO_free(input);
 
@@ -369,7 +372,13 @@ private:
         }
         else if (path == "/ca.crl" && isCrlAvailable)
         {
-            data = createCrl();
+            // One CRL per state, as a real CA publishes it (not a new one per request)
+            const QByteArray key = QByteArray::number(qlonglong(revokedSerial)) + (isStale ? "s" : "c");
+            if (!m_crls.contains(key))
+            {
+                m_crls.insert(key, createCrl());
+            }
+            data = m_crls.value(key);
         }
         else if (path == "/ca.cer")
         {
@@ -393,6 +402,7 @@ private:
     EVP_PKEY* m_userKey = nullptr;
     X509* m_root = nullptr;
     std::vector<X509*> m_issued;
+    QHash<QByteArray, QByteArray> m_crls;
 };
 
 }   // namespace longtermvalidationtest
@@ -810,13 +820,16 @@ void LongTermValidationTest::verificationReportGapInSignedRange()
 
 void LongTermValidationTest::verificationReportChainInSigningCertificate()
 {
-    // Review R3 N2: the attribute names the signer and its root
+    // Review R3 N2 / R4 M1: the attribute names the signer and its root, the root in
+    // the signature or not
+    for (const bool withRoot : { true, false })
+    {
     PDFDocumentBuilder builder;
     const PDFObjectReference page = builder.appendPage(QRectF(0, 0, 595, 842));
     const PDFDocument document = builder.build();
     PDFDocumentSigner::Parameters parameters;
     parameters.document = &document;
-    parameters.signFunction = [this](const QByteArray& data, QByteArray& result) { result = m_authority.signWithChainAttribute(m_good, data); return !result.isEmpty(); };
+    parameters.signFunction = [this, withRoot](const QByteArray& data, QByteArray& result) { result = m_authority.signWithChainAttribute(m_good, data, withRoot); return !result.isEmpty(); };
     parameters.createSignatureFieldFunction = [page](PDFDocumentBuilder& fieldBuilder, PDFObjectReference signatureDictionary)
     {
         return fieldBuilder.createSignatureField("Signature", signatureDictionary, page);
@@ -829,6 +842,7 @@ void LongTermValidationTest::verificationReportChainInSigningCertificate()
     QVERIFY2(report.signatures.front().isIntegrityValid, qPrintable(report.signatures.front().errors.join('\n')));
     QVERIFY(!report.signatures.front().chain.empty());
     QCOMPARE(report.signatures.front().chain.front().commonName, QString("Andre PDF test signer"));
+    }
 }
 
 void LongTermValidationTest::onlyTheNamedSignatureIsWalked()
