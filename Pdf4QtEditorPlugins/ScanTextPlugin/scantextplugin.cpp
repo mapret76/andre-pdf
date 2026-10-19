@@ -109,9 +109,8 @@ void ScanTextPlugin::onAreaPicked(pdf::PDFInteger pageIndex, QRectF pageRectangl
         return;
     }
 
-    const bool hadText = !pdf::PDFScanTextEditor::getText(m_document, pageIndex, pageRectangle).isEmpty();
-    bool isOcrLayerRemoved = false;
-    pdf::PDFDocumentPointer document = pdf::PDFScanTextEditor::apply(m_document, dialog.getEdit(), &isOcrLayerRemoved);
+    pdf::PDFScanTextEditor::HiddenText hiddenText = pdf::PDFScanTextEditor::HiddenText::None;
+    pdf::PDFDocumentPointer document = pdf::PDFScanTextEditor::apply(m_document, dialog.getEdit(), nullptr, &hiddenText);
     if (!document)
     {
         QMessageBox::critical(m_widget, tr("Edit Scanned Text"), tr("The text could not be replaced."));
@@ -122,17 +121,25 @@ void ScanTextPlugin::onAreaPicked(pdf::PDFInteger pageIndex, QRectF pageRectangl
     flags.setFlag(pdf::PDFModifiedDocument::PageContents);
     Q_EMIT m_widget->getToolManager()->documentModified(pdf::PDFModifiedDocument(document, nullptr, flags));
 
-    if (isOcrLayerRemoved)
+    switch (hiddenText)
     {
-        QMessageBox::information(m_widget, tr("Edit Scanned Text"),
-                                 tr("The text was replaced. The hidden OCR text of this page held the old words and was removed; "
-                                    "run OCR on the page again (Tools) to make the rest of the page searchable."));
-    }
-    else if (hadText)
-    {
-        QMessageBox::information(m_widget, tr("Edit Scanned Text"),
-                                 tr("The text was replaced on the page. The old words are covered, but the text layer of the document "
-                                    "still holds them. For born-digital text use Edit Page Content, which changes the text itself."));
+        case pdf::PDFScanTextEditor::HiddenText::OwnLayerRemoved:
+            QMessageBox::information(m_widget, tr("Edit Scanned Text"),
+                                     tr("The text was replaced. The hidden OCR text of this page held the old words and was removed; "
+                                        "run OCR on the page again (Tools) to make the rest of the page searchable."));
+            break;
+        case pdf::PDFScanTextEditor::HiddenText::ForeignRemoved:
+            QMessageBox::information(m_widget, tr("Edit Scanned Text"),
+                                     tr("The text was replaced. The hidden OCR text of another program at this place held the old words "
+                                        "and was removed; the new words are searchable."));
+            break;
+        case pdf::PDFScanTextEditor::HiddenText::Kept:
+            QMessageBox::warning(m_widget, tr("Edit Scanned Text"),
+                                 tr("The text was replaced on the page, but the old words are still in the text of the document "
+                                    "(search and copy find them). For born-digital text use Edit Page Content, which changes the text itself."));
+            break;
+        case pdf::PDFScanTextEditor::HiddenText::None:
+            break;
     }
 }
 

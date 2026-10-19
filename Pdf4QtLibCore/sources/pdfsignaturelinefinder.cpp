@@ -23,6 +23,7 @@
 #include "pdfsignaturelinefinder.h"
 #include "pdfdocument.h"
 #include "pdfform.h"
+#include "pdfdocumentbuilder.h"
 #include "pdfsignaturehandler.h"
 #include "pdftextlayout.h"
 #include "pdftextlayoutgenerator.h"
@@ -31,6 +32,8 @@
 #include "pdfcolorspaces.h"
 #include "pdfoptionalcontent.h"
 #include "pdfconstants.h"
+#include "pdfpageinitials.h"
+#include "pdfpage.h"
 
 #include <QRegularExpression>
 
@@ -46,13 +49,66 @@ static constexpr PDFReal LABEL_SIGNATURE_WIDTH = 160.0;
 
 bool PDFSignatureLineFinder::isSignatureLabel(const QString& text)
 {
+    constexpr QRegularExpression::PatternOptions options = QRegularExpression::CaseInsensitiveOption | QRegularExpression::UseUnicodePropertiesOption;
+
+    // The attestation clause "Signed at ___ on this ___ day of ___" has lines for the
+    // place and the date, not for a signature
+    static const QRegularExpression attestation(QStringLiteral("\\b(sign(ed)?|geteken|onderteken)\\s+(at|on|this|te|op)\\b|\\bday\\s+of\\b|\\bdag\\s+van\\b|\\bon\\s+this\\b"), options);
+    // These name the signature itself, also next to a date ("Signature & Date")
+    static const QRegularExpression explicitSignature(QStringLiteral("\\b(signature|handtekening|initials?|paraaf|parafeer)\\b"), options);
     // Lines for the name, the date or the place of the signing are not signed on,
     // even when the label mentions the signatory ("Name of signatory")
-    static const QRegularExpression other(QStringLiteral("\\b(name|naam|date|datum|place|plek|capacity|hoedanigheid|id|identity|identiteit|address|adres|print|full names|volle name)\\b"),
-                                          QRegularExpression::CaseInsensitiveOption | QRegularExpression::UseUnicodePropertiesOption);
-    static const QRegularExpression signature(QStringLiteral("(sign|handteken|geteken|witness|getuie|initial|paraaf|parafeer)"),
-                                              QRegularExpression::CaseInsensitiveOption | QRegularExpression::UseUnicodePropertiesOption);
+    static const QRegularExpression other(QStringLiteral("\\b(name|naam|date|datum|place|plek|capacity|hoedanigheid|id|identity|identiteit|address|adres|print|full names|volle name)\\b"), options);
+    static const QRegularExpression signature(QStringLiteral("(sign|geteken|witness|getuie|onderteken)|\\bon\\s+behalf\\s+of\\b|\\bnamens\\b|"
+                                                             "\\bfor\\s+the\\s+(purchaser|seller|buyer|lessor|lessee|landlord|tenant|company|employer|employee|contractor|client|owner|borrower|lender|surety)\\b|"
+                                                             "\\bvir\\s+die\\s+(koper|verkoper|verhuurder|huurder|maatskappy|werkgewer|werknemer|eienaar)\\b"), options);
+
+    if (attestation.match(text).hasMatch())
+    {
+        return false;
+    }
+    if (explicitSignature.match(text).hasMatch())
+    {
+        return true;
+    }
     return !other.match(text).hasMatch() && signature.match(text).hasMatch();
+}
+
+PDFDocumentPointer PDFSignatureLineFinder::addSignatureFields(const PDFDocument* document, const std::vector<SignatureLine>& lines, const QString& namePrefix)
+{
+    PDFDocumentModifier modifier(document);
+    PDFDocumentBuilder* builder = modifier.getBuilder();
+    int count = 0;
+    for (const SignatureLine& line : lines)
+    {
+        const PDFPage* page = document->getCatalog()->getPage(line.pageIndex);
+        if (!page || line.source == Source::SignatureField || line.rectangle.isEmpty())
+        {
+            continue;
+        }
+
+        ++count;
+        const PDFObjectReference field = builder->createSignatureField(QString("%1%2").arg(namePrefix).arg(count), PDFObjectReference(), page->getPageReference());
+        PDFObjectFactory factory;
+        factory.beginDictionary();
+        factory.beginDictionaryItem("Rect");
+        factory << line.rectangle;
+        factory.endDictionaryItem();
+        factory.endDictionary();
+        builder->mergeTo(field, factory.takeObject());
+    }
+
+    if (count == 0)
+    {
+        return nullptr;
+    }
+    modifier.markFormFieldChanged();
+    modifier.markAnnotationsChanged();
+    if (!modifier.finalize())
+    {
+        return nullptr;
+    }
+    return modifier.getDocument();
 }
 
 std::vector<PDFSignatureLineFinder::SignatureLine> PDFSignatureLineFinder::find(const PDFDocument* document)
@@ -128,6 +184,11 @@ std::vector<PDFSignatureLineFinder::SignatureLine> PDFSignatureLineFinder::find(
         generator.processContents();
         const PDFTextLayout layout = generator.createTextLayout();
 
+        // The lines are found in the page as displayed (a page turned by /Rotate has its
+        // lines across the user space); the rectangles go back to the page space
+        const QTransform displayToPage = PDFPageInitials::getDisplayToPageTransform(page);
+        const QTransform pageToDisplay = displayToPage.inverted();
+
         // All text lines of the page, a label can be in another text block than its line
         struct TextLine
         {
@@ -150,9 +211,11 @@ std::vector<PDFSignatureLineFinder::SignatureLine> PDFSignatureLineFinder::find(
             {
                 TextLine textLine;
                 textLine.text = lineText;
-                textLine.boxes.assign(boxes.begin() + lineStart, boxes.begin() + lineStart + lineText.size());
-                for (const QRectF& box : textLine.boxes)
+                textLine.boxes.reserve(lineText.size());
+                for (qsizetype i = 0; i < lineText.size(); ++i)
                 {
+                    const QRectF box = pageToDisplay.mapRect(boxes[lineStart + i]);
+                    textLine.boxes.push_back(box);
                     textLine.box = textLine.box.united(box);
                 }
                 lineStart += lineText.size() + 1;
@@ -228,7 +291,7 @@ std::vector<PDFSignatureLineFinder::SignatureLine> PDFSignatureLineFinder::find(
                 const QRectF runBox = getBox(textLine, match.capturedStart(), match.capturedEnd());
                 SignatureLine line;
                 line.pageIndex = PDFInteger(pageIndex);
-                line.rectangle = QRectF(runBox.left(), runBox.top(), runBox.width(), SIGNATURE_HEIGHT);
+                line.rectangle = displayToPage.mapRect(QRectF(runBox.left(), runBox.top(), runBox.width(), SIGNATURE_HEIGHT));
                 line.source = Source::Line;
                 line.label = label;
                 lines.push_back(line);
@@ -238,7 +301,7 @@ std::vector<PDFSignatureLineFinder::SignatureLine> PDFSignatureLineFinder::find(
             {
                 SignatureLine line;
                 line.pageIndex = PDFInteger(pageIndex);
-                line.rectangle = QRectF(textLine.box.right() + 6.0, textLine.box.top(), LABEL_SIGNATURE_WIDTH, SIGNATURE_HEIGHT);
+                line.rectangle = displayToPage.mapRect(QRectF(textLine.box.right() + 6.0, textLine.box.top(), LABEL_SIGNATURE_WIDTH, SIGNATURE_HEIGHT));
                 line.source = Source::Label;
                 line.label = textLine.text.simplified();
                 lines.push_back(line);
@@ -263,17 +326,21 @@ std::vector<PDFSignatureLineFinder::SignatureLine> PDFSignatureLineFinder::find(
     std::vector<SignatureLine> result(lines.begin(), lines.begin() + fieldCount);
     std::copy_if(lines.begin() + fieldCount, lines.end(), std::back_inserter(result), [&](const SignatureLine& line) { return !isCoveredByField(line); });
 
-    std::stable_sort(result.begin(), result.end(), [](const SignatureLine& a, const SignatureLine& b)
+    // Top of the displayed page first (y goes up), then from the left
+    std::stable_sort(result.begin(), result.end(), [catalog](const SignatureLine& a, const SignatureLine& b)
     {
         if (a.pageIndex != b.pageIndex)
         {
             return a.pageIndex < b.pageIndex;
         }
-        if (!qFuzzyCompare(a.rectangle.top(), b.rectangle.top()))
+        const QTransform pageToDisplay = PDFPageInitials::getDisplayToPageTransform(catalog->getPage(a.pageIndex)).inverted();
+        const QRectF displayA = pageToDisplay.mapRect(a.rectangle);
+        const QRectF displayB = pageToDisplay.mapRect(b.rectangle);
+        if (!qFuzzyCompare(displayA.top(), displayB.top()))
         {
-            return a.rectangle.top() > b.rectangle.top(); // y goes up, the top of the page first
+            return displayA.top() > displayB.top();
         }
-        return a.rectangle.left() < b.rectangle.left();
+        return displayA.left() < displayB.left();
     });
     return result;
 }

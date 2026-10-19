@@ -21,6 +21,10 @@
 // SOFTWARE.
 
 #include "pdfeditormainwindow.h"
+#include "pdfversionhistorydialog.h"
+#include <QTimer>
+#include <QSettings>
+#include <QGuiApplication>
 #include "ui_pdfeditormainwindow.h"
 
 #include "pdfaboutdialog.h"
@@ -200,6 +204,13 @@ PDFEditorMainWindow::PDFEditorMainWindow(QWidget* parent) :
     m_actionManager->setAction(PDFActionManager::ExportToWord, ui->actionExportToWord);
     m_actionManager->setAction(PDFActionManager::ExportToExcel, ui->actionExportToExcel);
     m_actionManager->setAction(PDFActionManager::Share, ui->actionShare);
+    m_actionManager->setAction(PDFActionManager::VersionHistory, ui->actionVersionHistory);
+    m_actionManager->setAction(PDFActionManager::CheckForUpdates, ui->actionCheckForUpdates);
+    {
+        QSettings settings;
+        ui->actionCheckForUpdatesAtStart->setChecked(settings.value(QStringLiteral("AndrePDF/CheckForUpdatesAtStart"), true).toBool());
+        connect(ui->actionCheckForUpdatesAtStart, &QAction::toggled, this, [](bool checked) { QSettings().setValue(QStringLiteral("AndrePDF/CheckForUpdatesAtStart"), checked); });
+    }
     m_actionManager->setAction(PDFActionManager::Sanitize, ui->actionSanitize);
     m_actionManager->setAction(PDFActionManager::RemoveExternalLinks, ui->actionRemoveExternalLinks);
     m_actionManager->setAction(PDFActionManager::PageGeometry, ui->actionPageGeometry);
@@ -602,6 +613,18 @@ void PDFEditorMainWindow::showEvent(QShowEvent* event)
 {
     QMainWindow::showEvent(event);
     m_progressTaskbarIndicator->setWindow(windowHandle());
+
+    // Once the window is shown: what changed since the last start. Not on the
+    // offscreen platform of the automated tests, where nobody closes a dialog.
+    if (!m_isStartupDone && QGuiApplication::platformName() != QStringLiteral("offscreen"))
+    {
+        m_isStartupDone = true;
+        QTimer::singleShot(0, this, [this]()
+        {
+            PDFVersionHistoryDialog::showWhatsNewOnce(this);
+            m_programController->checkForUpdates(true);
+        });
+    }
 }
 
 void PDFEditorMainWindow::dragEnterEvent(QDragEnterEvent* event)

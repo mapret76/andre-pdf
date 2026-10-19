@@ -182,22 +182,14 @@ PDFFontIdentifier::FontName PDFFontIdentifier::parsePdfFontName(const QByteArray
         name = name.left(separator);
     }
 
-    // Style words may be glued to the name ("ArialBold", "TimesNewRomanPSMT")
-    static const QRegularExpression styleWords(QStringLiteral("(Bold|Black|Heavy|Semibold|SemiBold|Demi|Italic|Oblique|Inclined)"));
-    for (QString* part : { &name, &style })
-    {
-        QRegularExpressionMatchIterator it = styleWords.globalMatch(*part);
-        while (it.hasNext())
-        {
-            const QString word = it.next().captured(1);
-            result.bold = result.bold || word.contains(QStringLiteral("Bold"), Qt::CaseInsensitive) || word == QStringLiteral("Black") || word == QStringLiteral("Heavy") || word == QStringLiteral("Demi");
-            result.italic = result.italic || word == QStringLiteral("Italic") || word == QStringLiteral("Oblique") || word == QStringLiteral("Inclined");
-        }
-    }
-    name.remove(styleWords);
-    name.remove(QRegularExpression(QStringLiteral("(PSMT|PS|MT|Regular|Roman|Std|Pro|LT)$")));
+    // The style part after the separator ("-BoldMT", ",Italic")
+    static const QRegularExpression boldWords(QStringLiteral("(Bold|Black|Heavy|Demi)"), QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression italicWords(QStringLiteral("(Italic|Oblique|Inclined)"), QRegularExpression::CaseInsensitiveOption);
+    result.bold = boldWords.match(style).hasMatch();
+    result.italic = italicWords.match(style).hasMatch();
 
-    // Known PostScript names of the standard and the common fonts
+    // Known PostScript names of the standard and the common fonts, looked up before any
+    // word is taken away ("TimesNewRoman" keeps its "Roman")
     static const std::pair<const char*, const char*> aliases[] = {
         { "Helvetica", "Helvetica" }, { "Times", "Times New Roman" }, { "TimesNewRoman", "Times New Roman" },
         { "Courier", "Courier New" }, { "CourierNew", "Courier New" }, { "Arial", "Arial" }, { "ArialNarrow", "Arial Narrow" },
@@ -205,13 +197,47 @@ PDFFontIdentifier::FontName PDFFontIdentifier::parsePdfFontName(const QByteArray
         { "Verdana", "Verdana" }, { "Garamond", "Garamond" }, { "BookAntiqua", "Book Antiqua" }, { "SegoeUI", "Segoe UI" },
         { "TrebuchetMS", "Trebuchet MS" }, { "Georgia", "Georgia" }, { "Symbol", "Symbol" }, { "ZapfDingbats", "Zapf Dingbats" }
     };
-    for (const auto& [postScriptName, family] : aliases)
+    auto findAlias = [](const QString& candidate) -> QString
     {
-        if (name.compare(QLatin1String(postScriptName), Qt::CaseInsensitive) == 0)
+        for (const auto& [postScriptName, family] : aliases)
         {
-            result.family = QLatin1String(family);
+            if (candidate.compare(QLatin1String(postScriptName), Qt::CaseInsensitive) == 0)
+            {
+                return QLatin1String(family);
+            }
+        }
+        return QString();
+    };
+
+    // Vendor suffixes, then style words glued to the end of the name ("ArialBold"),
+    // one after the other; a word inside the name ("Heavyweight") is left alone
+    static const QRegularExpression vendorSuffix(QStringLiteral("(PSMT|PS|MT|Std|Pro|LT)$"));
+    static const QRegularExpression styleSuffix(QStringLiteral("(Bold|Black|Heavy|Semibold|SemiBold|Demi|Italic|Oblique|Inclined|Regular|Roman|Medium|Book)$"));
+    for (int round = 0; round < 6; ++round)
+    {
+        if (const QString alias = findAlias(name); !alias.isEmpty())
+        {
+            result.family = alias;
             return result;
         }
+
+        QString shorter = name;
+        if (const QRegularExpressionMatch match = vendorSuffix.match(shorter); match.hasMatch())
+        {
+            shorter.chop(match.capturedLength());
+        }
+        else if (const QRegularExpressionMatch match = styleSuffix.match(shorter); match.hasMatch())
+        {
+            const QString word = match.captured(1);
+            result.bold = result.bold || boldWords.match(word).hasMatch() || word.compare(QStringLiteral("Semibold"), Qt::CaseInsensitive) == 0;
+            result.italic = result.italic || italicWords.match(word).hasMatch();
+            shorter.chop(match.capturedLength());
+        }
+        if (shorter == name || shorter.isEmpty())
+        {
+            break;
+        }
+        name = shorter;
     }
 
     // An installed family of the same letters is the family ("DejaVuSerif" -> "DejaVu Serif")

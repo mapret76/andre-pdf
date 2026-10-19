@@ -67,7 +67,7 @@ int main(int argc, char* argv[])
     QGuiApplication application(argc, argv);
     QCoreApplication::setOrganizationName("MelkaJ");
     QCoreApplication::setApplicationName("Andre PDF Mobile");
-    QCoreApplication::setApplicationVersion(pdf::PDF_LIBRARY_VERSION);
+    QCoreApplication::setApplicationVersion(ANDRE_PDF_VERSION);
     QGuiApplication::setApplicationDisplayName(QGuiApplication::translate("Application", "Andre PDF"));
     QQuickStyle::setStyle(QStringLiteral("Material"));
 

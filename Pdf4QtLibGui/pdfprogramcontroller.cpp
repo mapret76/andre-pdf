@@ -41,6 +41,9 @@
 #include "pdfsizereducer.h"
 #include "pdfofficeexporter.h"
 #include "pdfsharesheet.h"
+#include "pdfversionhistorydialog.h"
+#include "pdfupdatedialog.h"
+#include "pdfupdatechecker.h"
 #include "pdfdocumentsigner.h"
 #include <QLocale>
 #include "pdfsanitizedocumentdialog.h"
@@ -76,6 +79,11 @@
 #include <QFileDialog>
 #include <QtConcurrent/QtConcurrent>
 #include <QInputDialog>
+#include <QDate>
+#include <QProgressDialog>
+#include <QEventLoop>
+#include <QThread>
+#include <QStandardPaths>
 #include <QDir>
 #include <QUrl>
 #include <QSettings>
@@ -565,6 +573,14 @@ void PDFProgramController::initialize(Features features,
     if (QAction* action = m_actionManager->getAction(PDFActionManager::Optimize))
     {
         connect(action, &QAction::triggered, this, &PDFProgramController::onActionOptimizeTriggered);
+    }
+    if (QAction* action = m_actionManager->getAction(PDFActionManager::CheckForUpdates))
+    {
+        connect(action, &QAction::triggered, this, &PDFProgramController::onActionCheckForUpdatesTriggered);
+    }
+    if (QAction* action = m_actionManager->getAction(PDFActionManager::VersionHistory))
+    {
+        connect(action, &QAction::triggered, this, &PDFProgramController::onActionVersionHistoryTriggered);
     }
     if (QAction* action = m_actionManager->getAction(PDFActionManager::Share))
     {
@@ -1529,6 +1545,10 @@ void PDFProgramController::onActionAboutTriggered()
 void PDFProgramController::onActionSendByEMailTriggered()
 {
     Q_ASSERT(m_pdfDocument);
+    if (!askForSaveBeforeHandOver(tr("Send by E-Mail")))
+    {
+        return;
+    }
 
     QString subject = m_pdfDocument->getInfo()->title;
     if (subject.isEmpty())
@@ -1611,16 +1631,178 @@ void PDFProgramController::onActionReduceFileSizeTriggered()
     }
 }
 
+bool PDFProgramController::askForSaveBeforeHandOver(const QString& title)
+{
+    if (!m_undoRedoManager || m_undoRedoManager->isCurrentSaved())
+    {
+        return true;
+    }
+
+    switch (QMessageBox::question(m_mainWindow, title, tr("The document has unsaved changes, and the saved file is what is passed on. Save the changes first?"),
+                                  QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel, QMessageBox::Yes))
+    {
+        case QMessageBox::Yes:
+            performSave();
+            return m_undoRedoManager->isCurrentSaved();
+        case QMessageBox::No:
+            return true;
+        default:
+            return false;
+    }
+}
+
 QString PDFProgramController::getExportFileName(const QString& title, const QString& suffix, const QString& filter)
 {
+    // A document never saved gets a name in the documents folder
     const QFileInfo fileInfo(m_fileInfo.originalFileName);
-    const QString proposed = fileInfo.absolutePath() + "/" + fileInfo.completeBaseName() + suffix;
+    const QString directory = m_fileInfo.originalFileName.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) : fileInfo.absolutePath();
+    const QString baseName = fileInfo.completeBaseName().isEmpty() ? tr("Document") : fileInfo.completeBaseName();
+    const QString proposed = directory + "/" + baseName + suffix;
     return QFileDialog::getSaveFileName(m_mainWindow, title, proposed, filter);
+}
+
+void PDFProgramController::onActionVersionHistoryTriggered()
+{
+    PDFVersionHistoryDialog dialog(m_mainWindow, tr("Version History"), tr("You use Andre PDF %1.").arg(QApplication::applicationVersion()),
+                                   pdf::PDFVersionHistory::parse(pdf::PDFVersionHistory::getEmbeddedHistory()));
+    dialog.exec();
+}
+
+void PDFProgramController::onActionCheckForUpdatesTriggered()
+{
+    checkForUpdates(false);
+}
+
+void PDFProgramController::checkForUpdates(bool isAutomatic)
+{
+    QSettings settings;
+    settings.beginGroup(QStringLiteral("AndrePDF"));
+    if (isAutomatic)
+    {
+        // Once a day, and not when the user turned it off
+        const QDate lastCheck = settings.value(QStringLiteral("LastUpdateCheck")).toDate();
+        if (!settings.value(QStringLiteral("CheckForUpdatesAtStart"), true).toBool() || (lastCheck.isValid() && lastCheck >= QDate::currentDate()))
+        {
+            return;
+        }
+    }
+    settings.setValue(QStringLiteral("LastUpdateCheck"), QDate::currentDate());
+    settings.endGroup();
+
+    // The network work runs in a thread; the result comes back to the window
+    struct Result
+    {
+        std::optional<pdf::PDFUpdateChecker::Update> update;
+        QString errorMessage;
+    };
+    std::shared_ptr<Result> result = std::make_shared<Result>();
+    const QString currentVersion = QApplication::applicationVersion();
+    QThread* thread = QThread::create([result, currentVersion]() { result->update = pdf::PDFUpdateChecker::check(currentVersion, &result->errorMessage); });
+    if (!isAutomatic)
+    {
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+    }
+    connect(thread, &QThread::finished, this, [this, thread, result, isAutomatic, currentVersion]()
+    {
+        thread->deleteLater();
+        if (!isAutomatic)
+        {
+            QApplication::restoreOverrideCursor();
+        }
+
+        if (result->update)
+        {
+            offerUpdate(*result->update, isAutomatic);
+        }
+        else if (!isAutomatic)
+        {
+            if (result->errorMessage.isEmpty())
+            {
+                QMessageBox::information(m_mainWindow, tr("Check for Updates"), tr("You have the latest version of Andre PDF (%1).").arg(currentVersion));
+            }
+            else
+            {
+                QMessageBox::warning(m_mainWindow, tr("Check for Updates"), result->errorMessage);
+            }
+        }
+    });
+    thread->start();
+}
+
+void PDFProgramController::offerUpdate(const pdf::PDFUpdateChecker::Update& update, bool isAutomatic)
+{
+    QSettings settings;
+    settings.beginGroup(QStringLiteral("AndrePDF"));
+    if (isAutomatic && settings.value(QStringLiteral("SkippedVersion")).toString() == update.version)
+    {
+        return;     // the user skipped this version; a newer one is offered again
+    }
+
+    PDFUpdateDialog dialog(m_mainWindow, update, QApplication::applicationVersion());
+    dialog.exec();
+    if (dialog.getChoice() == PDFUpdateDialog::Choice::Skip)
+    {
+        settings.setValue(QStringLiteral("SkippedVersion"), update.version);
+        return;
+    }
+    if (dialog.getChoice() != PDFUpdateDialog::Choice::Install)
+    {
+        return;
+    }
+    settings.endGroup();
+
+    // Download with progress in a thread, then the checks of the size and the SHA-256
+    QProgressDialog progress(tr("Downloading Andre PDF %1...").arg(update.version), QString(), 0, 1000, m_mainWindow);
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+    progress.setValue(0);
+
+    QString fileName;
+    QString errorMessage;
+    const QString directory = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + QStringLiteral("/updates");
+    QThread* thread = QThread::create([&]()
+    {
+        fileName = pdf::PDFUpdateChecker::download(update, directory, [&progress, &update](qint64 received, qint64)
+        {
+            const int value = int(received * 1000 / qMax<qint64>(1, update.size));
+            QMetaObject::invokeMethod(&progress, [&progress, value]() { progress.setValue(qMin(value, 999)); }, Qt::QueuedConnection);
+        }, &errorMessage);
+    });
+    QEventLoop loop;
+    connect(thread, &QThread::finished, &loop, &QEventLoop::quit);
+    thread->start();
+    loop.exec();
+    thread->wait();
+    delete thread;
+    progress.setValue(1000);
+
+    if (fileName.isEmpty())
+    {
+        QMessageBox::critical(m_mainWindow, tr("Update"), errorMessage.isEmpty() ? tr("The update could not be downloaded.") : errorMessage);
+        return;
+    }
+
+    if (QMessageBox::question(m_mainWindow, tr("Update"), tr("Andre PDF %1 is downloaded and checked. Close Andre PDF and install it now?").arg(update.version),
+                              QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes) != QMessageBox::Yes || !askForSaveDocumentBeforeClose())
+    {
+        return;
+    }
+
+    if (!pdf::PDFUpdateChecker::startInstaller(fileName, &errorMessage))
+    {
+        QMessageBox::information(m_mainWindow, tr("Update"), errorMessage);
+        return;
+    }
+    QApplication::quit();
 }
 
 void PDFProgramController::onActionShareTriggered()
 {
     const QString title = tr("Share");
+    if (!askForSaveBeforeHandOver(title))
+    {
+        return;
+    }
     if (!QFile::exists(m_fileInfo.originalFileName))
     {
         QMessageBox::information(m_mainWindow, title, tr("Save the document first, the saved file is shared."));
@@ -1662,6 +1844,10 @@ void PDFProgramController::onActionExportToWordTriggered()
         box.exec();
         if (box.clickedButton() == openInWord)
         {
+            if (!askForSaveBeforeHandOver(title))
+            {
+                return;
+            }
             if (!QProcess::startDetached(wordPath, { QDir::toNativeSeparators(m_fileInfo.originalFileName) }))
             {
                 QMessageBox::critical(m_mainWindow, title, tr("Microsoft Word could not be started."));
@@ -2222,8 +2408,10 @@ void PDFProgramController::readSettings(Settings settingsFlags)
         settings.beginGroup("Plugins");
         m_loadAllPlugins = !settings.contains("EnabledPlugins");
         m_enabledPlugins = settings.value("EnabledPlugins").toStringList();
-        // Settings written before the list of the known plugins existed know the enabled ones
-        m_knownPlugins = settings.value("KnownPlugins", m_enabledPlugins).toStringList();
+        // Settings written before the list of the known plugins existed: every plugin was
+        // known then, except those Andre PDF added later (a disabled one stays disabled)
+        m_isKnownPluginsMissing = !settings.contains("KnownPlugins");
+        m_knownPlugins = settings.value("KnownPlugins").toStringList();
         settings.endGroup();
     }
 
@@ -2920,7 +3108,12 @@ void PDFProgramController::loadPlugins()
             m_plugins.back().pluginFileWithPath = pluginFileName;
 
             QString pluginName = m_plugins.back().name;
-            const bool isNewPlugin = !m_knownPlugins.contains(pluginName);
+            static const QStringList pluginsAddedByAndrePdf = { QStringLiteral("ScanText") };
+            const bool isNewPlugin = m_isKnownPluginsMissing ? pluginsAddedByAndrePdf.contains(pluginName) : !m_knownPlugins.contains(pluginName);
+            if (!m_knownPlugins.contains(pluginName))
+            {
+                m_knownPlugins << pluginName;   // known from now on, enabled or not
+            }
             if (!m_enabledPlugins.contains(pluginName) && !m_loadAllPlugins && !isNewPlugin)
             {
                 // The user has disabled the plugin
@@ -2928,11 +3121,10 @@ void PDFProgramController::loadPlugins()
                 continue;
             }
 
-            if (m_loadAllPlugins || isNewPlugin)
+            if ((m_loadAllPlugins || isNewPlugin) && !m_enabledPlugins.contains(pluginName))
             {
                 // A plugin added by an update is enabled, as on a fresh installation
                 m_enabledPlugins << pluginName;
-                m_knownPlugins << pluginName;
             }
 
             pdf::PDFPlugin* plugin = qobject_cast<pdf::PDFPlugin*>(loader.instance());

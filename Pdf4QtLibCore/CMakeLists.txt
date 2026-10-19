@@ -69,6 +69,11 @@ add_library(Pdf4QtLibCore SHARED
     sources/pdfscantexteditor.h
     sources/pdffontidentifier.cpp
     sources/pdffontidentifier.h
+    sources/pdfupdatechecker.cpp
+    sources/pdfupdatechecker.h
+    sources/pdfversionhistory.cpp
+    sources/pdfversionhistory.h
+    andrepdf.qrc
     sources/pdfsignaturelibrary.cpp
     sources/pdfsignaturelibrary.h
     sources/pdfsignaturestamp.cpp

@@ -23,6 +23,7 @@
 #ifndef PDFPROGRAMCONTROLLER_H
 #define PDFPROGRAMCONTROLLER_H
 
+#include "pdfupdatechecker.h"
 #include "pdfviewerglobal.h"
 #include "pdfdocument.h"
 #include "pdfsignaturehandler.h"
@@ -216,6 +217,8 @@ public:
         ExportToWord,
         ExportToExcel,
         Share,
+        VersionHistory,
+        CheckForUpdates,
         LastAction
     };
 
@@ -390,6 +393,20 @@ private:
     void onActionExportToWordTriggered();
     void onActionExportToExcelTriggered();
     void onActionShareTriggered();
+    void onActionVersionHistoryTriggered();
+    void onActionCheckForUpdatesTriggered();
+
+public:
+    /// Checks for an update in the background: automatic (once a day at the start,
+    /// quiet when there is none or on an error) or asked for by the user
+    void checkForUpdates(bool isAutomatic);
+
+private:
+    void offerUpdate(const pdf::PDFUpdateChecker::Update& update, bool isAutomatic);
+
+    /// Before the saved file is handed to another program: offers to save unsaved
+    /// changes; returns false, when the user cancels
+    bool askForSaveBeforeHandOver(const QString& title);
 
     /// Asks for the file of an export, the name of the document with the suffix
     QString getExportFileName(const QString& title, const QString& suffix, const QString& filter);
@@ -514,6 +531,7 @@ private:
 
     QStringList m_enabledPlugins;
     QStringList m_knownPlugins;     ///< Plugins found before; a plugin new to the user is enabled
+    bool m_isKnownPluginsMissing = false;
     bool m_loadAllPlugins;
     pdf::PDFPluginInfos m_plugins;
     std::vector<std::pair<pdf::PDFPluginInfo, pdf::PDFPlugin*>> m_loadedPlugins;

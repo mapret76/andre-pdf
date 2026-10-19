@@ -36,7 +36,7 @@ int main(int argc, char *argv[])
 
     QCoreApplication::setOrganizationName("MelkaJ");
     QCoreApplication::setApplicationName("PDF4QT Editor");
-    QCoreApplication::setApplicationVersion("1.0.0");
+    QCoreApplication::setApplicationVersion(ANDRE_PDF_VERSION);
     QApplication::setApplicationDisplayName(QApplication::translate("Application", "Andre PDF Editor"));
     QCommandLineParser parser;
     QCommandLineOption configPath = pdf::PDFSettings::getConfigPathOption();

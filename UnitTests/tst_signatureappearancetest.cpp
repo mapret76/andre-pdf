@@ -42,6 +42,7 @@
 #include <QLineEdit>
 #include <QCheckBox>
 #include <QSlider>
+#include <QRadioButton>
 #include <QTemporaryDir>
 #include <QTableWidget>
 #include <QPushButton>
@@ -558,11 +559,20 @@ void SignatureAppearanceTest::packSigningDialog()
     QCOMPARE(dialog.getParts()[1].name, QStringLiteral("Lease"));
     QCOMPARE(dialog.getParts()[1].firstPage, pdf::PDFInteger(2));
 
+    // Whose lines are signed must be chosen, nothing is preselected
+    const QList<QRadioButton*> radios = dialog.findChildren<QRadioButton*>();
+    QCOMPARE(radios.size(), 2);
+    QVERIFY(!radios[0]->isChecked() && !radios[1]->isChecked());
+    QTimer::singleShot(0, []() { if (QWidget* box = QApplication::activeModalWidget()) { box->close(); } });
+    dialog.accept();
+    QVERIFY(dialog.result() != int(QDialog::Accepted));
+    radios[0]->setChecked(true);
     dialog.accept();
     QCOMPARE(dialog.result(), int(QDialog::Accepted));
 
     // A missing folder keeps the dialog open
     pdfplugin::PackSigningDialog missingFolder(nullptr, &document, library, directory.filePath("missing/Pack.pdf"));
+    missingFolder.findChildren<QRadioButton*>().value(0)->setChecked(true);
     QTimer::singleShot(0, []() { if (QWidget* box = QApplication::activeModalWidget()) { box->close(); } });
     missingFolder.accept();
     QVERIFY(missingFolder.result() != int(QDialog::Accepted));

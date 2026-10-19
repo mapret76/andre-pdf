@@ -24,6 +24,8 @@
 #include "pdfaction.h"
 #include "pdfoutline.h"
 #include "pdfdocumentmanipulator.h"
+#include "pdfdocumentbuilder.h"
+#include "pdfform.h"
 #include "pdftextlayout.h"
 #include "pdftextlayoutgenerator.h"
 #include "pdfcms.h"
@@ -35,6 +37,7 @@
 #include <QRegularExpression>
 
 #include <algorithm>
+#include <set>
 
 #include "pdfdbgheap.h"
 
@@ -246,18 +249,88 @@ PDFDocument PDFContractPack::extract(const PDFDocument* document, const Part& pa
     {
         return PDFDocument();
     }
-    return manipulator.getAssembledDocument();
+    const PDFDocument& assembled = manipulator.getAssembledDocument();
+
+    // Form fields of the pages of the other contracts stay behind: a field is kept only
+    // when one of its widgets is on a page of the part
+    const PDFCatalog* catalog = assembled.getCatalog();
+    std::set<PDFObjectReference> pageReferences;
+    std::set<PDFObjectReference> annotations;
+    for (size_t i = 0; i < catalog->getPageCount(); ++i)
+    {
+        pageReferences.insert(catalog->getPage(i)->getPageReference());
+        const std::vector<PDFObjectReference>& pageAnnotations = catalog->getPage(i)->getAnnotations();
+        annotations.insert(pageAnnotations.cbegin(), pageAnnotations.cend());
+    }
+
+    const PDFForm form = PDFForm::parse(&assembled, catalog->getFormObject());
+    std::vector<PDFObjectReference> keptFields;
+    for (const PDFFormFieldPointer& field : form.getFormFields())
+    {
+        bool isOnPart = false;
+        field->apply([&](const PDFFormField* formField)
+        {
+            for (const PDFFormWidget& widget : formField->getWidgets())
+            {
+                isOnPart = isOnPart || pageReferences.count(widget.getPage()) || annotations.count(widget.getWidget());
+            }
+        });
+        if (isOnPart)
+        {
+            keptFields.push_back(field->getSelfReference());
+        }
+    }
+    if (keptFields.size() == form.getFormFields().size())
+    {
+        return assembled;
+    }
+
+    PDFDocumentBuilder builder(&assembled);
+    PDFObjectFactory fields;
+    fields.beginDictionary();
+    fields.beginDictionaryItem("Fields");
+    fields.beginArray();
+    for (const PDFObjectReference& reference : keptFields)
+    {
+        fields << reference;
+    }
+    fields.endArray();
+    fields.endDictionaryItem();
+    fields.endDictionary();
+    const PDFObject formObject = catalog->getFormObject();
+    if (formObject.isReference())
+    {
+        builder.mergeTo(formObject.getReference(), fields.takeObject());
+    }
+    else
+    {
+        PDFObjectFactory acroForm;
+        acroForm.beginDictionary();
+        acroForm.beginDictionaryItem("AcroForm");
+        acroForm << fields.takeObject();
+        acroForm.endDictionaryItem();
+        acroForm.endDictionary();
+        builder.mergeTo(builder.getCatalogReference(), acroForm.takeObject());
+    }
+    return builder.build();
 }
 
 QString PDFContractPack::getFileName(const QString& baseName, const Part& part, size_t index)
 {
-    static const QRegularExpression unsafe(QStringLiteral("[\\\\/:*?\"<>|\\x00-\\x1F]"));
+    // Characters Windows refuses in a name, control characters and the invisible
+    // formatting (bidirectional overrides could disguise the extension)
+    static const QRegularExpression unsafe(QStringLiteral("[\\\\/:*?\"<>|\\x00-\\x1F\\x7F]|\\p{Cf}"));
     QString name = QString(part.name).replace(unsafe, QStringLiteral(" ")).simplified();
+    QString base = QString(baseName).replace(unsafe, QStringLiteral(" ")).simplified();
+    while (name.endsWith(QChar('.')))
+    {
+        name.chop(1);
+    }
     if (name.isEmpty())
     {
         name = tr("Part %1").arg(index + 1);
     }
-    return QString("%1 - %2 %3.pdf").arg(baseName).arg(index + 1, 2, 10, QChar('0')).arg(name.left(80));
+    return QString("%1 - %2 %3.pdf").arg(base.isEmpty() ? tr("Contract") : base.left(80)).arg(index + 1, 2, 10, QChar('0')).arg(name.left(80));
 }
 
 }   // namespace pdf

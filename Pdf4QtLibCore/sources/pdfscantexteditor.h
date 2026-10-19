@@ -70,13 +70,28 @@ public:
     /// Returns true, if the page has the OCR text layer of this program
     static bool hasOwnOcrLayer(const PDFDocument* document, PDFInteger pageIndex);
 
+    /// Removes the invisible text (render mode 3, the OCR text of other programs) which
+    /// touches the area, on a page made only of images and invisible text (a scan); the
+    /// page content is written again. Returns nothing, when the page has other content
+    /// or no such text is in the area.
+    static PDFDocumentPointer removeInvisibleText(const PDFDocument* document, PDFInteger pageIndex, const QRectF& area);
+
+    /// What happened to the hidden text of the page by an edit
+    enum class HiddenText
+    {
+        None,               ///< The area had no text
+        OwnLayerRemoved,    ///< The OCR layer of this program was removed
+        ForeignRemoved,     ///< Invisible text of another program in the area was removed
+        Kept                ///< The text could not be removed (born-digital or mixed page)
+    };
+
     /// Applies the edit, returns the modified document, nothing on failure. The own
     /// OCR text layer of the page is removed: it would still hold the old words (and
     /// the change of the page unbinds it anyway); OCR of the page makes it again.
     /// \param document Document
     /// \param edit Edit
     /// \param isOcrLayerRemoved Set to true, when the OCR layer of the page was removed
-    static PDFDocumentPointer apply(const PDFDocument* document, const Edit& edit, bool* isOcrLayerRemoved = nullptr);
+    static PDFDocumentPointer apply(const PDFDocument* document, const Edit& edit, bool* isOcrLayerRemoved = nullptr, HiddenText* hiddenText = nullptr);
 };
 
 }   // namespace pdf

@@ -432,7 +432,7 @@ bool PDFDocumentWriter::findLastCrossReferenceSection(const QByteArray& data, PD
     return true;
 }
 
-PDFOperationResult PDFDocumentWriter::writeIncrementalUpdate(QIODevice* device, const QByteArray& originalData, const PDFDocument* document)
+PDFOperationResult PDFDocumentWriter::writeIncrementalUpdate(QIODevice* device, const QByteArray& originalData, const PDFDocument* document, const QString& password)
 {
     if (!device->isWritable())
     {
@@ -442,7 +442,14 @@ PDFOperationResult PDFDocumentWriter::writeIncrementalUpdate(QIODevice* device, 
     // The original document is parsed again from its data, because the document
     // being written can be derived from an edited version of it - the objects are
     // compared with what is really stored in the data.
-    PDFDocumentReader reader(nullptr, nullptr, false, false);
+    bool isPasswordOffered = false;
+    auto getPassword = [&password, &isPasswordOffered](bool* ok)
+    {
+        *ok = !isPasswordOffered;
+        isPasswordOffered = true;
+        return password;
+    };
+    PDFDocumentReader reader(nullptr, getPassword, false, false);
     const PDFDocument originalDocument = reader.readFromBuffer(originalData);
     if (reader.getReadingResult() != PDFDocumentReader::Result::OK)
     {

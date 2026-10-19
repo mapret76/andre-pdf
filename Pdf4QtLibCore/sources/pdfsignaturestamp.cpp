@@ -52,7 +52,9 @@ PDFSignatureStamp::Data PDFSignatureStamp::create(const PDFCertificateInfo& cert
                                                   const QByteArray& originalDocumentData)
 {
     Data data;
+    // Control characters (a new line in a forged name) would add lines to the payload
     data.signer = certificate.getName(PDFCertificateInfo::CommonName);
+    data.signer.removeIf([](QChar c) { return c.category() == QChar::Other_Control || c.category() == QChar::Other_Format; });
     data.signingTime = signingTime;
     data.certification = certification;
     data.certificateSha256 = QCryptographicHash::hash(certificate.getCertificateData(), QCryptographicHash::Sha256);
@@ -144,7 +146,17 @@ QString PDFSignatureStamp::formatFingerprint(const QByteArray& hash, int bytes)
 std::vector<std::vector<bool>> PDFSignatureStamp::getQrModules(const QString& payload)
 {
     const QByteArray utf8 = payload.toUtf8();
-    const qrcodegen::QrCode qrCode = qrcodegen::QrCode::encodeText(utf8.constData(), qrcodegen::QrCode::Ecc::LOW);
+    std::optional<qrcodegen::QrCode> encoded;
+    try
+    {
+        // Medium error correction (15 %) survives a stain or a fold of the printed page
+        encoded.emplace(qrcodegen::QrCode::encodeText(utf8.constData(), qrcodegen::QrCode::Ecc::MEDIUM));
+    }
+    catch (const std::exception&)
+    {
+        return { };     // too long for a QR code: the stamp has no QR code
+    }
+    const qrcodegen::QrCode& qrCode = *encoded;
 
     const int size = qrCode.getSize();
     std::vector<std::vector<bool>> modules(size, std::vector<bool>(size, false));

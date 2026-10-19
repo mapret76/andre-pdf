@@ -32,6 +32,10 @@
 #include "pdfconstants.h"
 #include "pdfoptionalcontent.h"
 #include "pdfocrtextlayerwriter.h"
+#include "pdfpagecontenteditorprocessor.h"
+#include "pdfpagecontenteditorcontentstreambuilder.h"
+#include "pdfstreamfilters.h"
+#include "pdfobjectutils.h"
 
 #include <QPainter>
 #include <QFontMetricsF>
@@ -146,7 +150,157 @@ bool PDFScanTextEditor::hasOwnOcrLayer(const PDFDocument* document, PDFInteger p
     return PDFOCRTextLayerWriter::getOwnLayerContentReference(document, pageIndex).isValid();
 }
 
-PDFDocumentPointer PDFScanTextEditor::apply(const PDFDocument* document, const Edit& edit, bool* isOcrLayerRemoved)
+PDFDocumentPointer PDFScanTextEditor::removeInvisibleText(const PDFDocument* document, PDFInteger pageIndex, const QRectF& area)
+{
+    const PDFPage* page = document->getCatalog()->getPage(pageIndex);
+    if (!page)
+    {
+        return nullptr;
+    }
+
+    PDFCMSGeneric cms;
+    PDFFontCache fontCache(DEFAULT_FONT_CACHE_LIMIT, DEFAULT_REALIZED_FONT_CACHE_LIMIT);
+    PDFICCProfileCache iccProfileCache;
+    PDFOptionalContentActivity activity(document, OCUsage::View, nullptr);
+    fontCache.setDocument(PDFModifiedDocument(const_cast<PDFDocument*>(document), &activity));
+    iccProfileCache.setDocument(PDFModifiedDocument(const_cast<PDFDocument*>(document), &activity));
+    PDFPageContentEditorProcessor processor(page, document, &fontCache, &iccProfileCache, &cms, &activity, QTransform(), PDFMeshQualitySettings());
+    processor.processContents();
+    PDFEditedPageContent content = processor.takeEditedPageContent();
+
+    // Only a scan (images and invisible text) is written again; anything else could
+    // change its look by the rewrite
+    std::vector<const PDFEditedPageContentElement*> kept;
+    bool isRemoved = false;
+    for (size_t i = 0; i < content.getElementCount(); ++i)
+    {
+        const PDFEditedPageContentElement* element = content.getElement(i);
+        if (element->getType() == PDFEditedPageContentElement::Type::Image)
+        {
+            kept.push_back(element);
+            continue;
+        }
+        const PDFEditedPageContentElementText* text = element->asText();
+        if (!text)
+        {
+            return nullptr;
+        }
+
+        // The state of a text item is the one set by the updates of the graphic state
+        // before it (render mode, font, text matrix). Invisible text draws nothing, so it
+        // has no outline: its place is estimated from the text matrix and the font size.
+        // ponytail: half an em per character for the width; enough for OCR words and lines
+        PDFPageContentProcessorState current = text->getState();
+        QRectF box = text->getBoundingBox();
+        for (const PDFEditedPageContentElementText::Item& item : text->getItems())
+        {
+            if (item.isUpdateGraphicState)
+            {
+                current = item.state;
+                continue;
+            }
+            if (!item.isText)
+            {
+                continue;
+            }
+            if (current.getTextRenderingMode() != TextRenderingMode::Invisible)
+            {
+                return nullptr;     // visible text: a born-digital page
+            }
+            const QTransform matrix = current.getTextMatrix() * current.getCurrentTransformationMatrix();
+            const qreal size = current.getTextFontSize();
+            const qreal width = 0.5 * size * qMax<qsizetype>(1, qsizetype(item.textSequence.items.size())) * current.getTextHorizontalScaling() / 100.0;
+            box = box.united(matrix.mapRect(QRectF(0, -0.2 * size, width, size)));
+        }
+        if (box.intersects(area))
+        {
+            isRemoved = true;
+        }
+        else
+        {
+            kept.push_back(element);
+        }
+    }
+    if (!isRemoved)
+    {
+        return nullptr;
+    }
+
+    PDFDocument writable = *document;
+    PDFPageContentEditorContentStreamBuilder contentBuilder(&writable);
+    contentBuilder.setFontDictionary(content.getFontDictionary());
+    contentBuilder.setXObjectDictionary(content.getXObjectDictionary());
+    contentBuilder.setGraphicStateDictionary(content.getGraphicStateDictionary());
+    contentBuilder.setShadingDictionary(content.getShadingDictionary());
+    for (const PDFEditedPageContentElement* element : kept)
+    {
+        contentBuilder.writeEditedElement(element);
+    }
+    if (!contentBuilder.getErrors().isEmpty())
+    {
+        return nullptr;
+    }
+
+    PDFDocumentModifier modifier(document);
+    PDFDocumentBuilder* builder = modifier.getBuilder();
+    PDFDictionaryBuilder fontDictionary = contentBuilder.getFontDictionary();
+    PDFDictionaryBuilder xobjectDictionary = contentBuilder.getXObjectDictionary();
+    PDFDictionaryBuilder graphicStateDictionary = contentBuilder.getGraphicStateDictionary();
+    PDFDictionaryBuilder shadingDictionary = contentBuilder.getShadingDictionary();
+    builder->replaceObjectsByReferences(fontDictionary);
+    builder->replaceObjectsByReferences(xobjectDictionary);
+    builder->replaceObjectsByReferences(graphicStateDictionary);
+    builder->replaceObjectsByReferences(shadingDictionary);
+
+    // As the page content editor does: the regenerated categories of the resources are
+    // replaced, the others kept
+    PDFDictionaryBuilder resources;
+    if (const PDFDictionary* current = document->getDictionaryFromObject(page->getResources()))
+    {
+        resources = PDFDictionaryBuilder(*current);
+    }
+    auto setResources = [&resources](const char* key, const PDFDictionaryBuilder& dictionary)
+    {
+        if (!dictionary.isEmpty())
+        {
+            resources.setEntry(PDFInplaceOrMemoryString(key), PDFObject::createDictionary(dictionary));
+        }
+    };
+    setResources("Font", fontDictionary);
+    setResources("XObject", xobjectDictionary);
+    setResources("ExtGState", graphicStateDictionary);
+    setResources("Shading", shadingDictionary);
+
+    PDFArrayBuilder filters;
+    filters.appendItem(PDFObject::createName("FlateDecode"));
+    QByteArray compressed = PDFFlateDecodeFilter::compress(contentBuilder.getOutputContent());
+    PDFDictionaryBuilder streamDictionary;
+    streamDictionary.setEntry(PDFInplaceOrMemoryString("Length"), PDFObject::createInteger(compressed.size()));
+    streamDictionary.setEntry(PDFInplaceOrMemoryString("Filter"), PDFObject::createArray(std::move(filters)));
+    const PDFObject contentObject = PDFObject::createStream(PDFStream(std::move(streamDictionary), std::move(compressed)));
+
+    PDFObjectFactory factory;
+    factory.beginDictionary();
+    factory.beginDictionaryItem("Resources");
+    factory << resources;
+    factory.endDictionaryItem();
+    factory.beginDictionaryItem("Contents");
+    factory << builder->addObject(contentObject);
+    factory.endDictionaryItem();
+    factory.endDictionary();
+    PDFObject pageObject = builder->getObjectByReference(page->getPageReference());
+    pageObject = PDFObjectManipulator::merge(pageObject, factory.takeObject(), PDFObjectManipulator::RemoveNullObjects);
+    builder->setObject(page->getPageReference(), std::move(pageObject));
+
+    modifier.markPageContentsChanged();
+    if (!modifier.finalize())
+    {
+        return nullptr;
+    }
+    return modifier.getDocument();
+}
+
+PDFDocumentPointer PDFScanTextEditor::apply(const PDFDocument* document, const Edit& edit, bool* isOcrLayerRemoved, HiddenText* hiddenText)
 {
     const PDFPage* page = document->getCatalog()->getPage(edit.pageIndex);
     if (!page || edit.area.isEmpty())
@@ -154,11 +308,35 @@ PDFDocumentPointer PDFScanTextEditor::apply(const PDFDocument* document, const E
         return nullptr;
     }
 
+    // The old words must not stay in the hidden text: the own OCR layer is removed (OCR
+    // makes it again), the invisible text of another program in the area too
+    HiddenText hidden = getText(document, edit.pageIndex, edit.area).isEmpty() ? HiddenText::None : HiddenText::Kept;
+    PDFDocumentPointer cleaned;
+    const bool hasOwnLayer = hasOwnOcrLayer(document, edit.pageIndex);
+    if (!hasOwnLayer && hidden == HiddenText::Kept)
+    {
+        cleaned = removeInvisibleText(document, edit.pageIndex, edit.area);
+        if (cleaned)
+        {
+            hidden = HiddenText::ForeignRemoved;
+            document = cleaned.data();
+            page = document->getCatalog()->getPage(edit.pageIndex);
+        }
+    }
+
     PDFDocumentModifier modifier(document);
-    const bool removed = hasOwnOcrLayer(document, edit.pageIndex) && PDFOCRTextLayerWriter::removeLayer(modifier.getBuilder(), document, edit.pageIndex);
+    const bool removed = hasOwnLayer && PDFOCRTextLayerWriter::removeLayer(modifier.getBuilder(), document, edit.pageIndex);
+    if (removed)
+    {
+        hidden = HiddenText::OwnLayerRemoved;
+    }
     if (isOcrLayerRemoved)
     {
         *isOcrLayerRemoved = removed;
+    }
+    if (hiddenText)
+    {
+        *hiddenText = hidden;
     }
     PDFPageContentStreamBuilder builder(modifier.getBuilder(), PDFContentStreamBuilder::CoordinateSystem::PDF, PDFPageContentStreamBuilder::Mode::PlaceAfter);
     QPainter* painter = builder.begin(page->getPageReference());

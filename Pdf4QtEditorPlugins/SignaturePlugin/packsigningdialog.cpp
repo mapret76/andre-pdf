@@ -125,7 +125,8 @@ PackSigningDialog::PackSigningDialog(QWidget* parent, const pdf::PDFDocument* do
     m_filteredLinesRadio = new QRadioButton(tr("Sign only lines labelled with"), signingBox);
     m_lineFilterEdit = new QLineEdit(signingBox);
     m_lineFilterEdit->setPlaceholderText(tr("for example Seller, or your company name"));
-    m_allLinesRadio->setChecked(true);
+    // No choice preselected: signing every line would put the signature on the lines of
+    // the other parties and of the witnesses too
     signingLayout->addRow(m_allLinesRadio);
     signingLayout->addRow(m_filteredLinesRadio, m_lineFilterEdit);
     signingLayout->addRow(new QLabel(tr("Lines left for another party keep the contract open for their signature (certified: form filling and signing allowed)."), signingBox));
@@ -242,6 +243,11 @@ void PackSigningDialog::accept()
     if (m_signatureCombo->count() == 0)
     {
         QMessageBox::critical(this, tr("Error"), tr("The signature library is empty - import your signature in the Signature Library first."));
+        return;
+    }
+    if (!m_allLinesRadio->isChecked() && !m_filteredLinesRadio->isChecked())
+    {
+        QMessageBox::critical(this, tr("Error"), tr("Choose whether you sign every signature line, or only the lines labelled with your name or company."));
         return;
     }
     if (m_filteredLinesRadio->isChecked() && getLineFilter().isEmpty())

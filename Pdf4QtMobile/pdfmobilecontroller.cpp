@@ -75,8 +75,9 @@ void PDFMobileController::setStatus(const QString& status)
     Q_EMIT statusChanged();
 }
 
-bool PDFMobileController::open(const QUrl& url)
+bool PDFMobileController::open(const QUrl& url, const QString& password)
 {
+    m_needsPassword = false;
     // A content URI of Android is read by QFile as well
     const QString fileName = url.isLocalFile() ? url.toLocalFile() : url.toString();
     QFile file(fileName);
@@ -88,10 +89,26 @@ bool PDFMobileController::open(const QUrl& url)
     const QByteArray data = file.readAll();
     file.close();
 
-    pdf::PDFDocumentReader reader(nullptr, nullptr, true, false);
+    // The password is offered once; without it an encrypted document does not open
+    bool isPasswordOffered = false;
+    bool isPasswordAsked = false;
+    auto getPassword = [&](bool* ok)
+    {
+        isPasswordAsked = true;
+        *ok = !isPasswordOffered && !password.isEmpty();
+        isPasswordOffered = true;
+        return password;
+    };
+    pdf::PDFDocumentReader reader(nullptr, getPassword, true, false);
     pdf::PDFDocument document = reader.readFromBuffer(data);
     if (reader.getReadingResult() != pdf::PDFDocumentReader::Result::OK)
     {
+        if (isPasswordAsked)
+        {
+            m_needsPassword = true;
+            setStatus(password.isEmpty() ? tr("The document is protected by a password.") : tr("The password is wrong."));
+            return false;
+        }
         setStatus(tr("The document cannot be read: %1").arg(reader.getErrorMessage()));
         return false;
     }
@@ -107,6 +124,7 @@ bool PDFMobileController::open(const QUrl& url)
             m_fileName = tr("document.pdf");
         }
         m_lines = pdf::PDFSignatureLineFinder::find(&m_document);
+        m_documentPassword = password;
         ++m_revision;
     }
     m_signedFileUrl = QUrl();
@@ -175,14 +193,21 @@ bool PDFMobileController::importSignature(int slot, const QUrl& imageUrl, const 
 
 QString PDFMobileController::getSignedFileName() const
 {
-    const QString signedName = QFileInfo(m_fileName).completeBaseName() + QStringLiteral("_SIGNED.pdf");
+    QString directory = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
     if (!m_localFileName.isEmpty() && QFileInfo(QFileInfo(m_localFileName).absolutePath()).isWritable())
     {
-        return QFileInfo(m_localFileName).absolutePath() + "/" + signedName;
+        directory = QFileInfo(m_localFileName).absolutePath();
     }
-    const QString documents = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
-    QDir().mkpath(documents);
-    return documents + "/" + signedName;
+    QDir().mkpath(directory);
+
+    // An existing file is never overwritten
+    const QString baseName = QFileInfo(m_fileName).completeBaseName();
+    QString fileName = directory + "/" + baseName + QStringLiteral("_SIGNED.pdf");
+    for (int i = 2; QFile::exists(fileName); ++i)
+    {
+        fileName = directory + "/" + baseName + QString("_SIGNED (%1).pdf").arg(i);
+    }
+    return fileName;
 }
 
 bool PDFMobileController::sign(const QUrl& certificateUrl, const QString& password, int certification, int signatureSlot, int pageIndex, double x, double y)
@@ -259,6 +284,7 @@ bool PDFMobileController::sign(const QUrl& certificateUrl, const QString& passwo
     parameters.document = &document;
     parameters.originalDocumentData = m_documentData;
     parameters.certification = static_cast<pdf::PDFDocumentSigner::Certification>(qBound(0, certification, 3));
+    parameters.openPassword = m_documentPassword;
     const pdf::PDFCertificateEntry entry = *certificate;
     parameters.signFunction = [entry, password](const QByteArray& data, QByteArray& result) { return pdf::PDFSignatureFactory::sign(entry, password, data, result); };
     const QString fieldName = QString("andrepdf_signature_%1").arg(QDateTime::currentMSecsSinceEpoch());
@@ -282,7 +308,7 @@ bool PDFMobileController::sign(const QUrl& certificateUrl, const QString& passwo
     }
     output.close();
 
-    const pdf::PDFDocumentSigner::SignedFileCheck check = pdf::PDFDocumentSigner::checkSignedFile(signedDocument, fieldName, QString());
+    const pdf::PDFDocumentSigner::SignedFileCheck check = pdf::PDFDocumentSigner::checkSignedFile(signedDocument, fieldName, m_documentPassword);
     m_signedFileUrl = QUrl::fromLocalFile(signedFileName);
     setStatus(check.isOK() ? tr("Signed and checked: %1. Saved as %2.").arg(pdf::PDFSignatureStamp::getCertificationText(check.certification).isEmpty() ? tr("not locked") : pdf::PDFSignatureStamp::getCertificationText(check.certification), QFileInfo(signedFileName).fileName())
                            : tr("The signed file did not pass the check."));

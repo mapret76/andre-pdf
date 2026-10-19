@@ -139,6 +139,10 @@ public:
         /// document is written again, so it must not be signed yet.
         std::optional<QString> encryptionUserPassword;
 
+        /// Password opening the document, when it is already encrypted (the signed
+        /// document is read back with it to verify the new signature)
+        QString openPassword;
+
         /// Progress reporting of the document writer, can be nullptr
         PDFProgress* progress = nullptr;
     };
@@ -160,12 +164,13 @@ public:
         bool isOpened = false;              ///< The file was read (with the password, when it is encrypted)
         bool isEncrypted = false;           ///< The file is encrypted
         bool isSignatureFound = false;      ///< The signature field of the given name holds a signature
-        bool isSignatureValid = false;      ///< The signature covers the file and is mathematically valid
+        bool isSignatureValid = false;      ///< The signature is mathematically valid
+        bool isCoveringWholeFile = false;   ///< The signature covers every byte of the file (nothing appended after it)
         Certification certification = Certification::None; ///< Certification of the document
         QStringList errors;                 ///< Errors of the signature verification
 
         /// Returns true, if everything checked is in order
-        bool isOK() const { return isOpened && isSignatureFound && isSignatureValid; }
+        bool isOK() const { return isOpened && isSignatureFound && isSignatureValid && isCoveringWholeFile; }
     };
 
     /// Reads a signed file back and checks the signature of the given field. The

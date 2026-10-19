@@ -236,7 +236,7 @@ PDFDocumentSigner::Result PDFDocumentSigner::signAttempt(const Parameters& param
     bool isWritten = false;
     if (!parameters.originalDocumentData.isEmpty())
     {
-        isWritten = bool(writer.writeIncrementalUpdate(&buffer, parameters.originalDocumentData, &documentToBeSigned));
+        isWritten = bool(writer.writeIncrementalUpdate(&buffer, parameters.originalDocumentData, &documentToBeSigned, parameters.openPassword));
         if (!isWritten && preserveExistingSignatures)
         {
             return Result::ExistingSignaturesNotPreserved;
@@ -326,7 +326,7 @@ PDFDocumentSigner::Result PDFDocumentSigner::signAttempt(const Parameters& param
     QByteArray writtenDocument = buffer.data();
     buffer.close();
 
-    if (!verifySignedDocument(writtenDocument, signatureField, isDocumentTimestamp, parameters.encryptionUserPassword.value_or(QString())))
+    if (!verifySignedDocument(writtenDocument, signatureField, isDocumentTimestamp, parameters.encryptionUserPassword.value_or(parameters.openPassword)))
     {
         return Result::VerificationFailed;
     }
@@ -373,6 +373,7 @@ PDFDocumentSigner::SignedFileCheck PDFDocumentSigner::checkSignedFile(const QByt
         {
             check.isSignatureFound = true;
             check.isSignatureValid = result.isSignatureValid();
+            check.isCoveringWholeFile = !result.hasFlag(PDFSignatureVerificationResult::Warning_Signature_NotCoveredBytes);
             check.errors = result.getErrors();
         }
     }

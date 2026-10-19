@@ -126,6 +126,7 @@ private:
     bool m_isLoadingUI;
     pdf::PDFProgress* m_progress;
     PDFWinTaskBarProgress* m_progressTaskbarIndicator;
+    bool m_isStartupDone = false;   ///< "What's new" and the update check ran
 
     QProgressBar* m_progressBarOnStatusBar;
     QLabel* m_progressBarLeftLabelOnStatusBar;

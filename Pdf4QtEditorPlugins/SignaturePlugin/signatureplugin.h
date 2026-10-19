@@ -62,7 +62,8 @@ private:
     void onToolActivityChanged();
     void onSceneEditElement(const std::set<pdf::PDFInteger>& elements);
     void onSignElectronically();
-    void onSignDigitally();
+    /// Signs the document; returns true, when it was signed and saved
+    bool onSignDigitally();
     void onOpenCertificatesManager();
     void onSceneActivityChanged();
     void onOpenSignatureLibrary();
@@ -157,6 +158,13 @@ private:
 
     /// Certification proposed to the next Sign dialog by the contract workflow
     std::optional<pdf::PDFDocumentSigner::Certification> m_suggestedCertification;
+
+    /// The contract workflow left lines to another party (a lock "no changes" would stop them)
+    bool m_isOtherPartySigning = false;
+
+    /// Returns the password opening the encrypted original file (asked for, when the
+    /// empty password does not open it); nothing when the user cancels
+    std::optional<QString> getOpenPassword(const QByteArray& originalData);
     bool m_sceneSelectionChangeEnabled;
 };
 

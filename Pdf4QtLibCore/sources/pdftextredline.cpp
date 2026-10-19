@@ -77,12 +77,22 @@ PDFTextRedline::Changes PDFTextRedline::compare(const Words& oldWords, const Wor
     const int maximal = qMin(n + m, MAXIMAL_EDIT_DISTANCE);
     const int offset = maximal + 1;
     std::vector<int> v(2 * maximal + 3, 0);
-    std::vector<std::vector<int>> trace;
+    // Of each round only the diagonals -d-1 .. d+1 are kept for the backtracking
+    // (quadratic in the edits, not in the size of the texts)
+    struct Round
+    {
+        int first = 0;              ///< Index into v of the first kept value
+        std::vector<int> values;
+        int operator[](int index) const { return values[index - first]; }
+    };
+    std::vector<Round> trace;
     bool isFound = (n == 0 && m == 0);
     int distance = 0;
     for (int d = 0; d <= maximal && !isFound; ++d)
     {
-        trace.push_back(v);
+        const int first = qMax(0, offset - d - 1);
+        const int last = qMin(int(v.size()) - 1, offset + d + 1);
+        trace.push_back(Round{ first, std::vector<int>(v.begin() + first, v.begin() + last + 1) });
         for (int k = -d; k <= d; k += 2)
         {
             int x = (k == -d || (k != d && v[offset + k - 1] < v[offset + k + 1])) ? v[offset + k + 1] : v[offset + k - 1] + 1;
@@ -108,7 +118,7 @@ PDFTextRedline::Changes PDFTextRedline::compare(const Words& oldWords, const Wor
         int y = m;
         for (int d = distance; d > 0; --d)
         {
-            const std::vector<int>& previous = trace[d];
+            const Round& previous = trace[d];
             const int k = x - y;
             const int previousK = (k == -d || (k != d && previous[offset + k - 1] < previous[offset + k + 1])) ? k + 1 : k - 1;
             const int previousX = previous[offset + previousK];

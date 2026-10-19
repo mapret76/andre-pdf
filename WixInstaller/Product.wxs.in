@@ -4,7 +4,7 @@
   <!-- 1 when the OCR support is built (PDF4QT_ENABLE_OCR of CMake), otherwise 0: the OCR components are left out -->
   <?define PDF4QT_ENABLE_OCR="${PDF4QT_WIX_OCR}" ?>
 
-  <Product Id="*" Name="Andre PDF" Language="1033" Version="${PDF4QT_VERSION}" Manufacturer="Andre Pretorius" UpgradeCode="db099924-5eda-4976-9613-561d9aeb9298">
+  <Product Id="*" Name="Andre PDF" Language="1033" Version="${ANDRE_PDF_VERSION}" Manufacturer="Andre Pretorius" UpgradeCode="db099924-5eda-4976-9613-561d9aeb9298">
     <Package Id="*" InstallerVersion="200" Compressed="yes" InstallScope="perMachine" Manufacturer="Andre Pretorius" Keywords="pdf,editor,viewer,sign" Comments="Andre PDF is based on PDF4QT by Jakub Melka" />
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of Andre PDF is already installed." />

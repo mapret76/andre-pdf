@@ -40,6 +40,7 @@
 #include "pdffontinstaller.h"
 #include "pdfscantexteditor.h"
 #include "pdfscanfontbuilder.h"
+#include "pdfversionhistory.h"
 #include <QRawFont>
 #include "pdfrenderer.h"
 #include "pdfcms.h"
@@ -53,6 +54,7 @@
 #include <QTemporaryDir>
 #include <QPainter>
 #include <QProcess>
+#include <QElapsedTimer>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QFontDatabase>
@@ -133,7 +135,9 @@ private slots:
     void fontMatching();
     void fontInstaller();
     void scanTextEdit();
+    void scanTextForeignOcr();
     void scanFont();
+    void versionHistory();
 
 private:
     static bool createTestCertificate(const QTemporaryDir& directory, PDFCertificateEntry& certificate, QString& password);
@@ -887,6 +891,39 @@ void SignatureBuilderTest::encryptedCertification()
     tampered[index + 1] = 't';
     QVERIFY(!PDFDocumentSigner::checkSignedFile(tampered, QStringLiteral("Locked"), QStringLiteral("open-me")).isOK());
 
+    // The other party countersigns an encrypted contract certified "form filling and
+    // signing": the password of the document opens it for the incremental update
+    QByteArray lockedForOthers;
+    QCOMPARE(sign(document, QByteArray(), PDFDocumentSigner::Certification::FormFilling, lockedForOthers), PDFDocumentSigner::Result::OK);
+    bool othersOffered = false;
+    PDFDocumentReader othersReader(nullptr, [&othersOffered](bool* ok) { *ok = !othersOffered; othersOffered = true; return QStringLiteral("open-me"); }, false, false);
+    const PDFDocument lockedForOthersDocument = othersReader.readFromBuffer(lockedForOthers);
+    QCOMPARE(othersReader.getReadingResult(), PDFDocumentReader::Result::OK);
+    auto countersign = [&](const QString& openPassword, QByteArray& result)
+    {
+        PDFDocumentSigner::Parameters parameters;
+        parameters.document = &lockedForOthersDocument;
+        parameters.originalDocumentData = lockedForOthers;
+        parameters.openPassword = openPassword;
+        parameters.signFunction = [&](const QByteArray& data, QByteArray& signature) { return PDFSignatureFactory::sign(certificate, password, data, signature); };
+        parameters.createSignatureFieldFunction = [&](PDFDocumentBuilder& fieldBuilder, PDFObjectReference signatureDictionary)
+        {
+            return fieldBuilder.createSignatureField("Countersignature", signatureDictionary, lockedForOthersDocument.getCatalog()->getPage(0)->getPageReference());
+        };
+        return PDFDocumentSigner::sign(parameters, result);
+    };
+    QByteArray countersigned;
+    QVERIFY(countersign(QString(), countersigned) != PDFDocumentSigner::Result::OK);   // without the password: refused, no crash
+    QCOMPARE(countersign(QStringLiteral("open-me"), countersigned), PDFDocumentSigner::Result::OK);
+    QVERIFY(countersigned.startsWith(lockedForOthers));
+    QVERIFY(PDFDocumentSigner::checkSignedFile(countersigned, QStringLiteral("Countersignature"), QStringLiteral("open-me")).isOK());
+    const PDFDocumentSigner::SignedFileCheck first = PDFDocumentSigner::checkSignedFile(countersigned, QStringLiteral("Locked"), QStringLiteral("open-me"));
+    QVERIFY(first.isSignatureValid && !first.isCoveringWholeFile);   // valid, the countersignature was added after it
+    QCOMPARE(first.certification, PDFDocumentSigner::Certification::FormFilling);
+
+    // Bytes appended after a signature are found
+    QVERIFY(!PDFDocumentSigner::checkSignedFile(locked + QByteArray("\n%appended"), QStringLiteral("Locked"), QStringLiteral("open-me")).isOK());
+
     // A signed document cannot be encrypted, its signatures would break
     QByteArray approved;
     QCOMPARE(signDocument(document, QByteArray(), certificate, password, "Approval", approved), PDFDocumentSigner::Result::OK);
@@ -1116,6 +1153,15 @@ void SignatureBuilderTest::signatureLineLabels()
     QVERIFY(!PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Name of signatory")));
     QVERIFY(!PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Datum")));
     QVERIFY(!PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Purchase price")));
+    // Attestation clause, signature next to the date, parties (South African contracts)
+    QVERIFY(!PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Signed at Rustenburg on this")));
+    QVERIFY(!PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("day of October 2026")));
+    QVERIFY(!PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Geteken te Rustenburg op hierdie")));
+    QVERIFY(PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Signature & Date")));
+    QVERIFY(PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Name and Signature")));
+    QVERIFY(PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("For the Purchaser:")));
+    QVERIFY(PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("For and on behalf of the Seller")));
+    QVERIFY(PDFSignatureLineFinder::isSignatureLabel(QStringLiteral("Vir die Koper:")));
 }
 
 void SignatureBuilderTest::signatureLineFinder()
@@ -1183,6 +1229,30 @@ void SignatureBuilderTest::signatureLineFinder()
     QCOMPARE(lines[3].pageIndex, PDFInteger(1));
     QCOMPARE(lines[3].source, PDFSignatureLineFinder::Source::SignatureField);
     QCOMPARE(lines[3].fieldName, QStringLiteral("Buyer"));
+
+    // A page turned by /Rotate 90: the text reads horizontally on the screen, the line
+    // is found as a wide area on the displayed page
+    PDFDocumentBuilder rotatedBuilder;
+    const PDFObjectReference rotatedPage = rotatedBuilder.appendPage(QRectF(0, 0, 595, 842));
+    rotatedBuilder.setPageRotation(rotatedPage, PageRotation::Rotate90);
+    {
+        PDFPageContentStreamBuilder content(&rotatedBuilder, PDFContentStreamBuilder::CoordinateSystem::Qt, PDFPageContentStreamBuilder::Mode::Replace);
+        QPainter* painter = content.begin(rotatedPage);
+        QFont font("DejaVu Sans");
+        font.setPixelSize(11);
+        painter->setFont(font);
+        // Displayed point (x, y up) is page point (595 - y, x); Qt y = 842 - page y
+        painter->translate(595 - 300, 842 - 100);
+        painter->rotate(-90);
+        painter->drawText(QPointF(0, 0), QStringLiteral("Signature: ________________________"));
+        content.end(painter);
+    }
+    const PDFDocument rotated = rotatedBuilder.build();
+    const std::vector<PDFSignatureLineFinder::SignatureLine> rotatedLines = PDFSignatureLineFinder::find(&rotated);
+    QCOMPARE(rotatedLines.size(), size_t(1));
+    const QRectF displayed = PDFPageInitials::getDisplayToPageTransform(rotated.getCatalog()->getPage(0)).inverted().mapRect(rotatedLines[0].rectangle);
+    QVERIFY2(displayed.width() > 100 && qAbs(displayed.height() - PDFSignatureLineFinder::SIGNATURE_HEIGHT) < 0.01 && qAbs(displayed.top() - 300) < 6,
+             qPrintable(QString("%1 %2 %3 %4").arg(displayed.left()).arg(displayed.top()).arg(displayed.width()).arg(displayed.height())));
 }
 
 void SignatureBuilderTest::contractPack()
@@ -1205,6 +1275,9 @@ void SignatureBuilderTest::contractPack()
         }
         content.end(painter);
     }
+    // A form field on the first page belongs to the first contract only
+    const PDFObjectReference saleField = builder.createSignatureField(QStringLiteral("Sale buyer"), PDFObjectReference(), builder.build().getCatalog()->getPage(0)->getPageReference());
+    Q_UNUSED(saleField);
     const PDFDocument document = builder.build();
 
     using Part = PDFContractPack::Part;
@@ -1232,12 +1305,33 @@ void SignatureBuilderTest::contractPack()
     QCOMPARE(fromStarts[2], (Part{ QStringLiteral("Lease"), 4, 5 }));
     QCOMPARE(PDFContractPack::getFileName(QStringLiteral("Pack"), Part{ QStringLiteral("Sale: A/B"), 0, 1 }, 0), QStringLiteral("Pack - 01 Sale A B.pdf"));
 
+    QCOMPARE(PDFContractPack::getFileName(QStringLiteral("Pack"), Part{ QString("Lease") + QChar(0x202E) + QStringLiteral("fdp.exe"), 0, 1 }, 1), QStringLiteral("Pack - 02 Lease fdp.exe.pdf"));
+    const PDFDocument sale = PDFContractPack::extract(&document, suggested[0]);
+    auto fieldCount = [](const PDFDocument& part)
+    {
+        const PDFForm form = PDFForm::parse(&part, part.getCatalog()->getFormObject());
+        return form.getFormFields().size();
+    };
+    QCOMPARE(fieldCount(sale), size_t(1));
+
     // The second contract on its own, signed and certified with a visible signature
     const PDFDocument lease = PDFContractPack::extract(&document, suggested[1]);
+    QCOMPARE(fieldCount(lease), size_t(0));
     QCOMPARE(lease.getCatalog()->getPageCount(), size_t(3));
     const std::vector<PDFSignatureLineFinder::SignatureLine> lines = PDFSignatureLineFinder::find(&lease);
     QCOMPARE(lines.size(), size_t(1));
     QCOMPARE(lines[0].pageIndex, PDFInteger(2));
+
+    // A line left to the other party becomes an empty signature field at its place
+    const PDFDocumentPointer withField = PDFSignatureLineFinder::addSignatureFields(&lease, lines, QStringLiteral("Other party "));
+    QVERIFY(withField);
+    const std::vector<PDFSignatureLineFinder::SignatureLine> fieldLines = PDFSignatureLineFinder::find(withField.data());
+    QCOMPARE(fieldLines.size(), size_t(1));    // the line and its field are one place
+    QCOMPARE(fieldLines[0].source, PDFSignatureLineFinder::Source::SignatureField);
+    QCOMPARE(fieldLines[0].fieldName, QStringLiteral("Other party 1"));
+    QVERIFY(fieldLines[0].rectangle.intersects(lines[0].rectangle));
+    QVERIFY(!PDFSignatureLineFinder::addSignatureFields(withField.data(), fieldLines, QStringLiteral("x")));   // fields are not added twice
+    QVERIFY(!PDFDocumentSigner::hasExistingSignatures(withField.data()));
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
@@ -1326,6 +1420,18 @@ void SignatureBuilderTest::officeExport()
     QVERIFY(PDFOfficeExporter::parseNumber(QStringLiteral("1,000,000"), value) && qFuzzyCompare(value, 1000000.0));
     QVERIFY(!PDFOfficeExporter::parseNumber(QStringLiteral("Clay bricks"), value));
     QVERIFY(!PDFOfficeExporter::parseNumber(QStringLiteral("2026-10-18"), value));
+    QVERIFY(PDFOfficeExporter::parseNumber(QStringLiteral("0.125"), value) && qFuzzyCompare(value, 0.125));
+    QVERIFY(PDFOfficeExporter::parseNumber(QStringLiteral("1,5"), value) && qFuzzyCompare(value, 1.5));
+    QVERIFY(PDFOfficeExporter::parseNumber(QStringLiteral("2 450,00"), value) && qFuzzyCompare(value, 2450.0));
+    QVERIFY(PDFOfficeExporter::parseNumber(QStringLiteral("1.234,50"), value) && qFuzzyCompare(value, 1234.5));
+    QVERIFY(PDFOfficeExporter::parseNumber(QStringLiteral("-R 250.00"), value) && qFuzzyCompare(value, -250.0));
+    QVERIFY(!PDFOfficeExporter::parseNumber(QStringLiteral("3.142"), value));          // decimal or thousands: text
+    QVERIFY(!PDFOfficeExporter::parseNumber(QStringLiteral("12.500"), value));
+    QVERIFY(!PDFOfficeExporter::parseNumber(QStringLiteral("18.10.2026"), value));     // a date
+    QVERIFY(!PDFOfficeExporter::parseNumber(QStringLiteral("1.2.3"), value));
+    QVERIFY(!PDFOfficeExporter::parseNumber(QStringLiteral("011 234 5678"), value));   // phone numbers
+    QVERIFY(!PDFOfficeExporter::parseNumber(QStringLiteral("0821234567"), value));
+    QVERIFY(!PDFOfficeExporter::parseNumber(QStringLiteral("8601015009087"), value));  // an ID number
 
     // A page with a title and a small table of three columns
     PDFDocumentBuilder builder;
@@ -1337,6 +1443,7 @@ void SignatureBuilderTest::officeExport()
         font.setPixelSize(10);
         painter->setFont(font);
         painter->drawText(QPointF(60, 60), QStringLiteral("Quotation & delivery <2026>"));
+        painter->drawText(QPointF(60, 760), QString("Bad") + QChar(0xFFFE) + QChar(0xD800) + QStringLiteral("chars"));
         const char* rows[][3] = { { "Item", "Qty", "Price" }, { "Clay bricks", "1 000", "2 450,00" }, { "Cement", "20", "1 790,00" } };
         for (int row = 0; row < 3; ++row)
         {
@@ -1355,7 +1462,7 @@ void SignatureBuilderTest::officeExport()
     {
         found << line.cells.join(" | ");
     }
-    QVERIFY2(pages[0].size() == 4, qPrintable(found.join("\n")));
+    QVERIFY2(pages[0].size() == 5, qPrintable(found.join("\n")));
     QCOMPARE(pages[0][0].text, QStringLiteral("Quotation & delivery <2026>"));
     QCOMPARE(pages[0][2].cells, (QStringList{ QStringLiteral("Clay bricks"), QStringLiteral("1 000"), QStringLiteral("2 450,00") }));
 
@@ -1440,6 +1547,22 @@ void SignatureBuilderTest::textRedline()
     const QString reportText = reportWords.join(' ');
     QVERIFY2(reportText.contains(QStringLiteral("sixty (60)")) && reportText.contains(QStringLiteral("thirty (30)")) && reportText.contains(QStringLiteral("Lease v2.pdf")), qPrintable(reportText));
 
+    // Two unrelated texts of 3000 words: within the edit limit, one replaced block or
+    // many changes, quickly and without a huge memory
+    PDFTextRedline::Words left;
+    PDFTextRedline::Words right;
+    for (int i = 0; i < 3000; ++i)
+    {
+        left.push_back({ QString("a%1").arg(i), 0 });
+        right.push_back({ QString("b%1").arg(i), 0 });
+    }
+    QElapsedTimer timer;
+    timer.start();
+    const PDFTextRedline::Changes unrelated = PDFTextRedline::compare(left, right);
+    QCOMPARE(unrelated.size(), size_t(1));
+    QCOMPARE(unrelated.front().type, PDFTextRedline::ChangeType::Replaced);
+    QVERIFY2(timer.elapsed() < 30000, qPrintable(QString::number(timer.elapsed())));
+
     // Many changes flow over several pages
     PDFTextRedline::Changes many(120, changes.front());
     QVERIFY(PDFTextRedline::createReport(many, QStringLiteral("a"), QStringLiteral("b")).getCatalog()->getPageCount() > 2);
@@ -1460,6 +1583,10 @@ void SignatureBuilderTest::fontNames()
     QVERIFY(check("OpenSans-SemiBold", "Open Sans", true, false));
     QVERIFY(check("SourceSansPro-Regular", "Source Sans", false, false));
     QVERIFY(check("Times-Roman", "Times New Roman", false, false));
+    QVERIFY(check("TimesNewRoman,Bold", "Times New Roman", true, false));
+    QVERIFY(check("TimesNewRoman", "Times New Roman", false, false));
+    QVERIFY(check("ArialBold", "Arial", true, false));
+    QVERIFY(check("Heavyweight", "Heavyweight", false, false));
 
     QCOMPARE(PDFFontIdentifier::getMetricCompatibleSubstitutes(QStringLiteral("arial")).value(0), QStringLiteral("Liberation Sans"));
     QCOMPARE(PDFFontIdentifier::getMetricCompatibleSubstitutes(QStringLiteral("Calibri")), QStringList{ QStringLiteral("Carlito") });
@@ -1569,6 +1696,18 @@ void SignatureBuilderTest::fontInstaller()
             {
                 body = R"([{"id":"test-font","family":"Test Font","license":"OFL-1.1","category":"sans-serif"}])";
             }
+            else if (path == "/v1/fonts?family=Evil%20Font")
+            {
+                body = R"([{"id":"../../evil","family":"Evil Font","license":"OFL-1.1","category":"serif"}])";
+            }
+            else if (path == "/v1/fonts?family=File%20Font")
+            {
+                body = R"([{"id":"file-font","family":"File Font","license":"OFL-1.1","category":"serif"}])";
+            }
+            else if (path == "/v1/fonts/file-font")
+            {
+                body = R"({"id":"file-font","variants":{"400":{"normal":{"latin":{"url":{"ttf":"file:///etc/hostname"}}}}}})";
+            }
             else if (path == "/v1/fonts?family=Paid%20Font")
             {
                 body = R"([{"id":"paid-font","family":"Paid Font","license":"Proprietary","category":"serif"}])";
@@ -1624,7 +1763,18 @@ void SignatureBuilderTest::fontInstaller()
     // Regular and bold exist, italics not: two files installed and loaded
     QVERIFY2(PDFFontInstaller::install(*font, &errorMessage), qPrintable(errorMessage));
     const QStringList installed = QDir(directory.filePath(QStringLiteral("fonts"))).entryList({ QStringLiteral("*.ttf") });
-    QCOMPARE(installed, (QStringList{ QStringLiteral("TestFont-Bold.ttf"), QStringLiteral("TestFont-Regular.ttf") }));
+    QCOMPARE(installed, (QStringList{ QStringLiteral("andrepdf-test-font-bold.ttf"), QStringLiteral("andrepdf-test-font-regular.ttf") }));
+
+    // A hostile catalogue: an identifier with a path, an installer address of another scheme
+    QVERIFY(!PDFFontInstaller::find(QStringLiteral("Evil Font")));
+    const std::optional<PDFFontInstaller::FontInfo> fileFont = PDFFontInstaller::find(QStringLiteral("File Font"));
+    QVERIFY(fileFont);
+    QVERIFY(PDFFontInstaller::download(*fileFont, 400, false, &errorMessage).isEmpty());
+    QVERIFY(errorMessage.contains(QStringLiteral("not of the font catalogue")));
+    PDFFontInstaller::FontInfo forged = *fileFont;
+    forged.id = QStringLiteral("../x");
+    QVERIFY(!PDFFontInstaller::install(forged, &errorMessage));
+    QCOMPARE(QDir(directory.filePath(QStringLiteral("fonts"))).entryList({ QStringLiteral("*.ttf") }).size(), 2);
     QVERIFY(PDFFontIdentifier::isInstalled(QStringLiteral("DejaVu Sans")));
 
     // A font for the trial of the matching is cached, the second time without the network
@@ -1790,6 +1940,18 @@ void SignatureBuilderTest::scanFont()
     QCOMPARE(raw.familyName(), QStringLiteral("Scan Font Test"));
     QVERIFY(raw.supportsCharacter(QChar('9')) && raw.supportsCharacter(QChar('a')) && !raw.supportsCharacter(QChar('X')));
 
+    // OS/2 version 4 is 96 bytes; the metrics of a 40 px font are about 40 px
+    const QByteArray os2 = raw.fontTable("OS/2");
+    QCOMPARE(os2.size(), 96);
+    auto u16 = [&os2](int offset) { return int(quint16((uchar(os2[offset]) << 8) | uchar(os2[offset + 1]))); };
+    auto s16 = [&u16](int offset) { return int(qint16(u16(offset))); };
+    QCOMPARE(u16(0), 4);
+    QVERIFY(u16(64) <= u16(66));                   // usFirstCharIndex <= usLastCharIndex
+    QVERIFY(s16(68) > 0 && s16(70) < 0);           // sTypoAscender > 0 > sTypoDescender
+    QVERIFY(u16(74) > 0 && u16(74) < 2000);        // usWinAscent
+    QVERIFY(s16(86) > 300 && s16(86) < 700);       // sxHeight in units of 1000 per em
+    QVERIFY(raw.ascent() > 20 && raw.ascent() < 60);
+
     const int id = QFontDatabase::addApplicationFontFromData(ttf);
     QVERIFY(id >= 0);
     QCOMPARE(QFontDatabase::applicationFontFamilies(id).value(0), QStringLiteral("Scan Font Test"));
@@ -1819,6 +1981,149 @@ void SignatureBuilderTest::scanFont()
     QString built;
     QVERIFY(!PDFScanFontBuilder::build(&document, { 0 }, QStringLiteral("Scan Font Build"), &built).isEmpty());
     QCOMPARE(built, characters);
+}
+
+void SignatureBuilderTest::versionHistory()
+{
+    QVERIFY(PDFVersionHistory::compare(QStringLiteral("1.10.0"), QStringLiteral("1.9.2")) > 0);
+    QVERIFY(PDFVersionHistory::compare(QStringLiteral("1.0"), QStringLiteral("1.0.0")) == 0);
+    QVERIFY(PDFVersionHistory::compare(QStringLiteral("1.0.0"), QStringLiteral("1.0.1")) < 0);
+    QVERIFY(PDFVersionHistory::isValidVersion(QStringLiteral("2.3.4")));
+    QVERIFY(!PDFVersionHistory::isValidVersion(QStringLiteral("2.3.x")));
+    QVERIFY(!PDFVersionHistory::isValidVersion(QStringLiteral("1.0.0; rm -rf")));
+
+    const QString markdown = QStringLiteral(
+        "# History\n\n"
+        "## 1.1.0 - 2026-11-01\n\nSummary: Faster signing.\n\n- Signing is faster.\n- A fix\n  continued here.\n\n"
+        "## 1.10.0 - 2027-01-05\n\nSummary: Big one.\n\n- New\n\n"
+        "## 1.0.0 - 2026-10-19\n\nSummary: First.\n\n- Everything\n");
+    const PDFVersionHistory::Releases releases = PDFVersionHistory::parse(markdown);
+    QCOMPARE(releases.size(), size_t(3));
+    QCOMPARE(releases[0].version, QStringLiteral("1.10.0"));   // sorted numerically, newest first
+    QCOMPARE(releases[1].summary, QStringLiteral("Faster signing."));
+    QCOMPARE(releases[1].changes, (QStringList{ QStringLiteral("Signing is faster."), QStringLiteral("A fix continued here.") }));
+    QCOMPARE(releases[1].date, QDate(2026, 11, 1));
+
+    const PDFVersionHistory::Releases newer = PDFVersionHistory::getNewer(releases, QStringLiteral("1.0.0"));
+    QCOMPARE(newer.size(), size_t(2));
+    QVERIFY(PDFVersionHistory::getNewer(releases, QStringLiteral("1.10.0")).empty());
+    QVERIFY(PDFVersionHistory::toMarkdown(newer).contains(QStringLiteral("**Big one.**")));
+
+    // The program carries its own history, its newest entry is its version
+    const PDFVersionHistory::Releases embedded = PDFVersionHistory::parse(PDFVersionHistory::getEmbeddedHistory());
+    QVERIFY(!embedded.empty());
+    QCOMPARE(embedded.front().version, QStringLiteral(ANDRE_PDF_VERSION));
+    for (const PDFVersionHistory::Release& release : embedded)
+    {
+        QVERIFY2(!release.summary.isEmpty() && !release.changes.isEmpty() && release.date.isValid(), qPrintable(release.version));
+    }
+}
+
+void SignatureBuilderTest::scanTextForeignOcr()
+{
+    if (!PDFFontIdentifier::isInstalled(QStringLiteral("DejaVu Serif")))
+    {
+        QSKIP("The font DejaVu Serif is not installed");
+    }
+
+    // A scan: an image of the text, and the invisible OCR text of another program
+    // (render mode 3, a standard font) at the same place
+    QImage scan(1000, 120, QImage::Format_RGB32);
+    scan.fill(Qt::white);
+    {
+        QPainter painter(&scan);
+        QFont font("DejaVu Serif");
+        font.setPixelSize(58);
+        painter.setFont(font);
+        painter.setPen(Qt::black);
+        painter.drawText(QPointF(10, 80), QStringLiteral("Purchase price R 950 000"));
+    }
+    PDFDocumentBuilder builder;
+    const PDFObjectReference page = builder.appendPage(QRectF(0, 0, 595, 842));
+    {
+        PDFPageContentStreamBuilder content(&builder, PDFContentStreamBuilder::CoordinateSystem::Qt, PDFPageContentStreamBuilder::Mode::Replace);
+        QPainter* painter = content.begin(page);
+        painter->drawImage(QRectF(55, 842 - 230, 250, 30), scan);
+        content.end(painter);
+    }
+    const QByteArray ocrText = "BT 3 Tr /AndreOcr 11 Tf 58 620 Td (Purchase price R 950 000) Tj ET\nBT 3 Tr /AndreOcr 11 Tf 58 400 Td (Elsewhere) Tj ET\n";
+    PDFDictionaryBuilder streamDictionary;
+    streamDictionary.setEntry(PDFInplaceOrMemoryString("Length"), PDFObject::createInteger(ocrText.size()));
+    const PDFObjectReference ocrStream = builder.addObject(PDFObject::createStream(PDFStream(std::move(streamDictionary), QByteArray(ocrText))));
+    {
+        const PDFDocument draft = builder.build();
+        const PDFObject pageObject = draft.getObjectByReference(page);
+        const PDFDictionary* pageDictionary = pageObject.getDictionary();
+        PDFObjectFactory update;
+        update.beginDictionary();
+        update.beginDictionaryItem("Contents");
+        update.beginArray();
+        // The OCR text first: the stream of the content builder leaves its coordinate
+        // system (y down) for the streams after it
+        update << ocrStream;
+        const PDFObject contents = pageDictionary->get("Contents");
+        if (contents.isReference())
+        {
+            update << contents.getReference();
+        }
+        else
+        {
+            for (const PDFObject& item : *draft.getObject(contents).getArray())
+            {
+                update << item.getReference();
+            }
+        }
+        update.endArray();
+        update.endDictionaryItem();
+        update.endDictionary();
+        builder.mergeTo(page, update.takeObject());
+
+        PDFObjectFactory font;
+        font.beginDictionary();
+        font.beginDictionaryItem("Font");
+        font.beginDictionary();
+        font.beginDictionaryItem("AndreOcr");
+        font.beginDictionary();
+        font.beginDictionaryItem("Type"); font << WrapName("Font"); font.endDictionaryItem();
+        font.beginDictionaryItem("Subtype"); font << WrapName("Type1"); font.endDictionaryItem();
+        font.beginDictionaryItem("BaseFont"); font << WrapName("Helvetica"); font.endDictionaryItem();
+        font.endDictionary();
+        font.endDictionaryItem();
+        font.endDictionary();
+        font.endDictionaryItem();
+        font.endDictionary();
+        const PDFObject resources = pageDictionary->get("Resources");
+        builder.mergeTo(resources.isReference() ? resources.getReference() : page, font.takeObject());
+    }
+    const PDFDocument document = builder.build();
+
+    const QRectF area(55, 842 - 232, 260, 34);
+    QVERIFY2(PDFScanTextEditor::getText(&document, 0, area).contains(QStringLiteral("950 000")), qPrintable(PDFScanTextEditor::getText(&document, 0, area)));
+    QVERIFY(!PDFScanTextEditor::hasOwnOcrLayer(&document, 0));
+
+    PDFScanTextEditor::Edit edit;
+    edit.pageIndex = 0;
+    edit.area = area;
+    edit.inkRectangle = PDFScanTextEditor::getInkRectangle(PDFScanTextEditor::renderArea(&document, 0, area, 150), area);
+    edit.text = QStringLiteral("Purchase price R 875 000");
+    edit.font = QFont(QStringLiteral("DejaVu Serif"));
+    edit.font.setPointSizeF(13);
+    PDFScanTextEditor::HiddenText hidden = PDFScanTextEditor::HiddenText::None;
+    const PDFDocumentPointer edited = PDFScanTextEditor::apply(&document, edit, nullptr, &hidden);
+    QVERIFY(edited);
+    QCOMPARE(hidden, PDFScanTextEditor::HiddenText::ForeignRemoved);
+
+    // The old amount is gone from the text, the new one is there, the other words stay
+    const QString text = PDFScanTextEditor::getText(edited.data(), 0, area);
+    QVERIFY2(!text.contains(QStringLiteral("950")) && text.contains(QStringLiteral("875 000")), qPrintable(text));
+    QVERIFY(PDFScanTextEditor::getText(edited.data(), 0, QRectF(50, 390, 200, 30)).contains(QStringLiteral("Elsewhere")));
+
+    // The image of the scan is still drawn (outside the edited area)
+    const QImage rendered = PDFScanTextEditor::renderArea(edited.data(), 0, QRectF(55, 842 - 230, 250, 30), 72);
+    QVERIFY(!rendered.isNull());
+
+    // A born-digital page is not rewritten
+    QVERIFY(!PDFScanTextEditor::removeInvisibleText(edited.data(), 0, QRectF(50, 390, 200, 30)));
 }
 
 QTEST_MAIN(SignatureBuilderTest)

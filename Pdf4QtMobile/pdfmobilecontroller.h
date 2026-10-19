@@ -63,8 +63,15 @@ public:
     int getSignatureLineCount() const { return int(m_lines.size()); }
     QUrl getSignedFileUrl() const { return m_signedFileUrl; }
 
-    /// Opens a document (a local file or a content URI of Android)
-    Q_INVOKABLE bool open(const QUrl& url);
+    /// Opens a document (a local file or a content URI of Android), with the password
+    /// of an encrypted document; needsPassword() tells when it is missing or wrong
+    Q_INVOKABLE bool open(const QUrl& url, const QString& password = QString());
+
+    /// Opens the file signed last (with the password of the document it was made from)
+    Q_INVOKABLE bool openSigned() { const QString password = m_documentPassword; return open(m_signedFileUrl, password); }
+
+    /// The last document did not open for lack of its password
+    Q_INVOKABLE bool needsPassword() const { return m_needsPassword; }
 
     /// Returns the height of the displayed page divided by its width
     Q_INVOKABLE double getPageAspectRatio(int pageIndex) const;
@@ -104,6 +111,8 @@ private:
     QString m_localFileName;
     int m_revision = 0;
     QString m_status;
+    bool m_needsPassword = false;
+    QString m_documentPassword;     ///< Password of the open document, kept only while it is open
     QUrl m_signedFileUrl;
     pdf::PDFSignatureLibrary m_library;
     std::vector<pdf::PDFSignatureLineFinder::SignatureLine> m_lines;

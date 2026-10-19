@@ -57,8 +57,10 @@ ApplicationWindow {
                 enabled: window.placing
                 onClicked: (mouse) => {
                     window.placing = false
-                    controller.sign(window.certificateUrl, passwordField.text, lockCombo.currentIndex === 3 ? 0 : lockCombo.currentIndex + 1,
-                                    slotCombo.currentIndex, index, mouse.x / width, mouse.y / height)
+                    if (controller.sign(window.certificateUrl, passwordField.text, lockCombo.currentIndex === 3 ? 0 : lockCombo.currentIndex + 1,
+                                        slotCombo.currentIndex, index, mouse.x / width, mouse.y / height))
+                        controller.openSigned()
+                    passwordField.text = ""
                 }
             }
         }
@@ -73,7 +75,29 @@ ApplicationWindow {
     FileDialog {
         id: openDialog
         nameFilters: [ qsTr("PDF documents (*.pdf)") ]
-        onAccepted: controller.open(selectedFile)
+        onAccepted: {
+            if (!controller.open(selectedFile) && controller.needsPassword()) {
+                documentPasswordDialog.fileUrl = selectedFile
+                documentPasswordDialog.open()
+            }
+        }
+    }
+
+    Dialog {
+        id: documentPasswordDialog
+        property url fileUrl
+        title: qsTr("Password of the Document")
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        TextField { id: documentPasswordField; echoMode: TextInput.Password; width: parent.width }
+        onAccepted: {
+            const opened = controller.open(fileUrl, documentPasswordField.text)
+            documentPasswordField.text = ""
+            if (!opened && controller.needsPassword())
+                open()
+        }
+        onRejected: documentPasswordField.text = ""
     }
 
     FileDialog {
@@ -117,7 +141,9 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 onClicked: {
                     signDialog.close()
-                    controller.sign(window.certificateUrl, passwordField.text, lockCombo.currentIndex === 3 ? 0 : lockCombo.currentIndex + 1, slotCombo.currentIndex, -1, 0, 0)
+                    if (controller.sign(window.certificateUrl, passwordField.text, lockCombo.currentIndex === 3 ? 0 : lockCombo.currentIndex + 1, slotCombo.currentIndex, -1, 0, 0))
+                        controller.openSigned()
+                    passwordField.text = ""
                 }
             }
             Button {

@@ -382,7 +382,10 @@ PDFDocumentReader::Result PDFDocumentReader::processSecurityHandler(const PDFObj
 
     // Read the security handler
     m_securityHandler = PDFSecurityHandler::createSecurityHandler(encryptObject, id);
-    PDFSecurityHandler::AuthorizationResult authorizationResult = m_securityHandler->authenticate(m_getPasswordCallback, m_authorizeOwnerOnly);
+    // Without a callback the empty password is tried once and no password is asked for
+    // (an empty std::function would throw std::bad_function_call, which aborts)
+    const std::function<QString(bool*)> getPassword = m_getPasswordCallback ? m_getPasswordCallback : [](bool* ok) { *ok = false; return QString(); };
+    PDFSecurityHandler::AuthorizationResult authorizationResult = m_securityHandler->authenticate(getPassword, m_authorizeOwnerOnly);
 
     if (authorizationResult == PDFSecurityHandler::AuthorizationResult::Cancelled)
     {

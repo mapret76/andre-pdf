@@ -139,6 +139,10 @@
     </property>
     <addaction name="actionGetSource"/>
     <addaction name="actionBecomeASponsor"/>
+    <addaction name="separator"/>
+    <addaction name="actionCheckForUpdates"/>
+    <addaction name="actionCheckForUpdatesAtStart"/>
+    <addaction name="actionVersionHistory"/>
     <addaction name="actionAbout"/>
    </widget>
    <widget class="QMenu" name="menuDeveloper">
@@ -788,6 +792,33 @@
    </property>
    <property name="statusTip">
     <string>Optimizes document to reduce file size.</string>
+   </property>
+  </action>
+  <action name="actionCheckForUpdatesAtStart">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Check for Updates at &amp;Start</string>
+   </property>
+   <property name="statusTip">
+    <string>Once a day at the start, Andre PDF asks GitHub whether a newer version exists. Nothing is installed without your consent.</string>
+   </property>
+  </action>
+  <action name="actionCheckForUpdates">
+   <property name="text">
+    <string>Check for &amp;Updates...</string>
+   </property>
+   <property name="statusTip">
+    <string>Looks for a newer version of Andre PDF and shows what it changes; installs it only when you agree.</string>
+   </property>
+  </action>
+  <action name="actionVersionHistory">
+   <property name="text">
+    <string>&amp;Version History...</string>
+   </property>
+   <property name="statusTip">
+    <string>Shows every version of Andre PDF and what it changed.</string>
    </property>
   </action>
   <action name="actionShare">

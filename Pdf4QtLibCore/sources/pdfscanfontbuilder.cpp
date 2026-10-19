@@ -730,7 +730,8 @@ QByteArray PDFScanFontBuilder::createTrueTypeFont(const std::vector<Glyph>& glyp
     Helper::writeUInt16(os2, 400);
     Helper::writeUInt16(os2, 5);
     Helper::writeUInt16(os2, 0);               // fsType: installable, embedding allowed
-    for (int i = 0; i < 10; ++i) { Helper::writeInt16(os2, qint16(i % 2 ? 300 : 650)); } // sub/superscript sizes and offsets
+    // Sub- and superscript: x size, y size, x offset, y offset (OS/2 version 4 has 96 bytes)
+    for (const int value : { 650, 600, 0, 75, 650, 600, 0, 350 }) { Helper::writeInt16(os2, qint16(value)); }
     Helper::writeInt16(os2, 50);               // strikeout size
     Helper::writeInt16(os2, qint16(xHeightUnits / 2));
     Helper::writeInt16(os2, 0);                // family class

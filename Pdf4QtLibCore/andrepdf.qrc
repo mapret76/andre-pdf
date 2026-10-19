@@ -1,0 +1,6 @@
+<RCC>
+    <qresource prefix="/andre-pdf">
+        <file alias="CHANGELOG.md">../CHANGELOG.md</file>
+        <file alias="release-key.pub.pem">andre-pdf-release-key.pub.pem</file>
+    </qresource>
+</RCC>

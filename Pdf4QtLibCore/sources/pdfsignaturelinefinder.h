@@ -24,6 +24,7 @@
 #define PDFSIGNATURELINEFINDER_H
 
 #include "pdfglobal.h"
+#include "pdfdocument.h"
 
 #include <QRectF>
 #include <QString>
@@ -64,6 +65,12 @@ public:
     /// Finds the signature lines of the document, ordered by page and from the
     /// top of the page down
     static std::vector<SignatureLine> find(const PDFDocument* document);
+
+    /// Adds an empty (unsigned) signature field on each line, for the lines left to
+    /// another party: a reader offers the field to sign, also in a document certified
+    /// "form filling and signing" or encrypted. Lines which are fields already are
+    /// skipped. Returns the modified document, nothing when no field was added.
+    static PDFDocumentPointer addSignatureFields(const PDFDocument* document, const std::vector<SignatureLine>& lines, const QString& namePrefix);
 
     /// Returns true, if the text labels a signature (and not a name or date line)
     static bool isSignatureLabel(const QString& text);

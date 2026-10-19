@@ -85,7 +85,7 @@ public:
 
     /// Largest number of edits the diff searches for; beyond it the texts are reported
     /// as replaced as a whole (two unrelated documents)
-    static constexpr int MAXIMAL_EDIT_DISTANCE = 6000;
+    static constexpr int MAXIMAL_EDIT_DISTANCE = 4000;
 
     /// Number of words of context before and after a change
     static constexpr int CONTEXT_WORDS = 6;

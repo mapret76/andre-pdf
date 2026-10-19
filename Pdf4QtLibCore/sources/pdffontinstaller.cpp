@@ -31,6 +31,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QUrlQuery>
+#include <QRegularExpression>
 #include <QFontDatabase>
 #include <QJsonDocument>
 #include <QNetworkReply>
@@ -64,27 +65,88 @@ public:
         return directory;
     }
 
-    /// Downloads a URL synchronously (with a timeout), returns nothing on failure
-    static std::optional<QByteArray> get(const QUrl& url, QString* errorMessage)
+    static QStringList& allowedHosts()
     {
+        static QStringList hosts = { QStringLiteral("api.fontsource.org"), QStringLiteral("cdn.jsdelivr.net") };
+        return hosts;
+    }
+
+    static bool& isTestMode()
+    {
+        static bool value = false;
+        return value;
+    }
+
+    /// Downloads a URL synchronously (with a timeout and a size limit), only over HTTPS
+    /// from the hosts of the catalogue; returns nothing on failure
+    static std::optional<QByteArray> get(const QUrl& url, qint64 limit, QString* errorMessage)
+    {
+        const bool isAllowed = (url.scheme() == QStringLiteral("https") || (isTestMode() && url.scheme() == QStringLiteral("http"))) &&
+                               allowedHosts().contains(url.host(), Qt::CaseInsensitive);
+        if (!isAllowed)
+        {
+            if (errorMessage)
+            {
+                *errorMessage = PDFFontInstaller::tr("The address %1 is not of the font catalogue, nothing was downloaded.").arg(url.toString());
+            }
+            return std::nullopt;
+        }
+
         QNetworkAccessManager manager;
         QNetworkRequest request(url);
         request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Andre PDF"));
         request.setTransferTimeout(30000);
+        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::SameOriginRedirectPolicy);
         QNetworkReply* reply = manager.get(request);
 
+        QByteArray data;
+        bool isTooLarge = false;
+        QObject::connect(reply, &QNetworkReply::readyRead, reply, [&]()
+        {
+            data.append(reply->readAll());
+            if (data.size() > limit)
+            {
+                isTooLarge = true;
+                reply->abort();
+            }
+        });
         QEventLoop loop;
         QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
-        loop.exec();
+        if (!reply->isFinished())
+        {
+            loop.exec();
+        }
+        data.append(reply->readAll());
 
-        const QByteArray data = reply->readAll();
-        const bool isOK = reply->error() == QNetworkReply::NoError;
+        const bool isOK = reply->error() == QNetworkReply::NoError && !isTooLarge && data.size() <= limit;
         if (!isOK && errorMessage)
         {
-            *errorMessage = PDFFontInstaller::tr("Download of %1 failed: %2").arg(url.toString(), reply->errorString());
+            *errorMessage = isTooLarge ? PDFFontInstaller::tr("%1 is larger than expected.").arg(url.toString())
+                                       : PDFFontInstaller::tr("Download of %1 failed: %2").arg(url.toString(), reply->errorString());
         }
         reply->deleteLater();
         return isOK ? std::optional<QByteArray>(data) : std::nullopt;
+    }
+
+    /// The identifier of a font of the catalogue ("open-sans")
+    static bool isValidId(const QString& id)
+    {
+        static const QRegularExpression expression(QStringLiteral("^[a-z0-9][a-z0-9-]{0,63}$"));
+        return expression.match(id).hasMatch();
+    }
+
+    /// Letters, digits and spaces of a family, for names of files and registry values
+    static QString getSafeName(const QString& family)
+    {
+        QString name;
+        for (QChar c : family)
+        {
+            if ((c.isLetterOrNumber() && c.unicode() < 0x80) || c == QChar(' '))
+            {
+                name += c;
+            }
+        }
+        return name.simplified().left(64);
     }
 
     static QString getCacheDirectory()
@@ -107,7 +169,7 @@ std::optional<PDFFontInstaller::FontInfo> PDFFontInstaller::find(const QString& 
     query.addQueryItem(QStringLiteral("family"), family);
     url.setQuery(query);
 
-    const std::optional<QByteArray> data = PDFFontInstallerHelper::get(url, errorMessage);
+    const std::optional<QByteArray> data = PDFFontInstallerHelper::get(url, 4 * 1024 * 1024, errorMessage);
     if (!data)
     {
         return std::nullopt;
@@ -121,7 +183,7 @@ std::optional<PDFFontInstaller::FontInfo> PDFFontInstaller::find(const QString& 
         info.family = object.value(QStringLiteral("family")).toString();
         info.license = object.value(QStringLiteral("license")).toString();
         info.category = object.value(QStringLiteral("category")).toString();
-        if (info.family.compare(family, Qt::CaseInsensitive) == 0 && !info.id.isEmpty())
+        if (info.family.compare(family, Qt::CaseInsensitive) == 0 && PDFFontInstallerHelper::isValidId(info.id) && !PDFFontInstallerHelper::getSafeName(info.family).isEmpty())
         {
             return info;
         }
@@ -145,7 +207,15 @@ QByteArray PDFFontInstaller::download(const FontInfo& font, int weight, bool ita
         return QByteArray();
     }
 
-    const std::optional<QByteArray> data = PDFFontInstallerHelper::get(QUrl(PDFFontInstallerHelper::apiBaseUrl() + QStringLiteral("/fonts/") + font.id), errorMessage);
+    if (!PDFFontInstallerHelper::isValidId(font.id))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = tr("The font %1 has no valid identifier in the catalogue.").arg(font.family);
+        }
+        return QByteArray();
+    }
+    const std::optional<QByteArray> data = PDFFontInstallerHelper::get(QUrl(PDFFontInstallerHelper::apiBaseUrl() + QStringLiteral("/fonts/") + font.id), 4 * 1024 * 1024, errorMessage);
     if (!data)
     {
         return QByteArray();
@@ -166,7 +236,7 @@ QByteArray PDFFontInstaller::download(const FontInfo& font, int weight, bool ita
         return QByteArray();
     }
 
-    return PDFFontInstallerHelper::get(QUrl(ttf), errorMessage).value_or(QByteArray());
+    return PDFFontInstallerHelper::get(QUrl(ttf), 20 * 1024 * 1024, errorMessage).value_or(QByteArray());
 }
 
 QStringList PDFFontInstaller::getCandidateFamilies()
@@ -186,7 +256,12 @@ QStringList PDFFontInstaller::getCandidateFamilies()
 QString PDFFontInstaller::loadForTrial(const QString& family, QString* errorMessage)
 {
     const QString cacheDirectory = PDFFontInstallerHelper::getCacheDirectory();
-    const QString fileName = cacheDirectory + "/" + QString(family).replace(QChar(' '), QChar('_')) + QStringLiteral("-400-normal.ttf");
+    const QString safeName = PDFFontInstallerHelper::getSafeName(family).replace(QChar(' '), QChar('_'));
+    if (safeName.isEmpty())
+    {
+        return QString();
+    }
+    const QString fileName = cacheDirectory + "/" + safeName + QStringLiteral("-400-normal.ttf");
 
     QByteArray data;
     QFile cached(fileName);
@@ -260,14 +335,19 @@ bool PDFFontInstaller::install(const FontInfo& font, QString* errorMessage)
             {
                 if (errorMessage)
                 {
-                    *errorMessage = styleError;
+                    *errorMessage = installed > 0 ? tr("%1 styles of %2 were installed, then: %3").arg(installed).arg(font.family, styleError) : styleError;
                 }
-                return false;
+                return installed > 0;
             }
             continue;   // the family has no such style
         }
 
-        const QString fileName = QString("%1/%2-%3.ttf").arg(directory, QString(font.family).remove(QChar(' ')), QString::fromLatin1(style.name).remove(QChar(' ')));
+        // The name comes from the checked identifier, nothing else of the catalogue
+        if (!PDFFontInstallerHelper::isValidId(font.id))
+        {
+            return false;
+        }
+        const QString fileName = QString("%1/andrepdf-%2-%3.ttf").arg(directory, font.id, QString::fromLatin1(style.name).remove(QChar(' ')).toLower());
         QSaveFile file(fileName);
         if (!file.open(QFile::WriteOnly) || file.write(data) != data.size() || !file.commit())
         {
@@ -284,7 +364,7 @@ bool PDFFontInstaller::install(const FontInfo& font, QString* errorMessage)
             // Registered for the user, so every program finds it; AddFontResource makes
             // it available to the running programs too
             QSettings fonts(QStringLiteral("HKEY_CURRENT_USER\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"), QSettings::NativeFormat);
-            fonts.setValue(QString("%1 %2 (TrueType)").arg(font.family, QString::fromLatin1(style.name)), QDir::toNativeSeparators(fileName));
+            fonts.setValue(QString("%1 %2 (TrueType)").arg(PDFFontInstallerHelper::getSafeName(font.family), QString::fromLatin1(style.name)), QDir::toNativeSeparators(fileName));
             AddFontResourceW(reinterpret_cast<LPCWSTR>(QDir::toNativeSeparators(fileName).utf16()));
         }
 #endif
@@ -311,6 +391,10 @@ void PDFFontInstaller::setTestConfiguration(const QString& apiBaseUrl, const QSt
 {
     PDFFontInstallerHelper::apiBaseUrl() = apiBaseUrl;
     PDFFontInstallerHelper::testInstallDirectory() = installDirectory;
+    const QUrl url(apiBaseUrl);
+    PDFFontInstallerHelper::isTestMode() = url.host() == QStringLiteral("127.0.0.1");
+    PDFFontInstallerHelper::allowedHosts() = PDFFontInstallerHelper::isTestMode() ? QStringList{ QStringLiteral("127.0.0.1") }
+                                                                                 : QStringList{ QStringLiteral("api.fontsource.org"), QStringLiteral("cdn.jsdelivr.net") };
 }
 
 }   // namespace pdf

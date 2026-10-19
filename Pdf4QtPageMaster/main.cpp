@@ -72,7 +72,7 @@ int main(int argc, char *argv[])
 
     QCoreApplication::setOrganizationName("MelkaJ");
     QCoreApplication::setApplicationName("PDF4QT PageMaster");
-    QCoreApplication::setApplicationVersion(pdf::PDF_LIBRARY_VERSION);
+    QCoreApplication::setApplicationVersion(ANDRE_PDF_VERSION);
     QApplication::setApplicationDisplayName(QApplication::translate("Application", "Andre PDF Pages"));
 
     QCommandLineOption noDrm("no-drm", "Disable DRM settings of documents.");

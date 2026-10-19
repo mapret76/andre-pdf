@@ -188,10 +188,14 @@ QByteArray PDFSignatureLibrary::protect(const QByteArray& data)
 
 std::optional<QByteArray> PDFSignatureLibrary::unprotect(const QByteArray& data)
 {
+#ifndef Q_OS_WIN
+    // On Windows only the DPAPI form is written, a plain file planted in the profile
+    // is not accepted as the user's signatures
     if (data.startsWith(PROTECTED_PLAIN_MARK))
     {
         return data.mid(int(qstrlen(PROTECTED_PLAIN_MARK)));
     }
+#endif
 
 #ifdef Q_OS_WIN
     if (data.startsWith(PROTECTED_DPAPI_MARK))

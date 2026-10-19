@@ -45,6 +45,10 @@ add_library(Pdf4QtLibGui SHARED
     pdfsendmail.h
     pdfsharesheet.cpp
     pdfsharesheet.h
+    pdfversionhistorydialog.cpp
+    pdfversionhistorydialog.h
+    pdfupdatedialog.cpp
+    pdfupdatedialog.h
     pdfsidebarwidget.cpp
     pdfsidebarwidget.h
     pdftexttospeech.cpp

@@ -72,7 +72,8 @@ public:
     /// \param device Output device positioned at the start of the file
     /// \param originalData Data of the original document
     /// \param document Document to be written
-    PDFOperationResult writeIncrementalUpdate(QIODevice* device, const QByteArray& originalData, const PDFDocument* document);
+    /// \param password Password opening the original document, when it is encrypted
+    PDFOperationResult writeIncrementalUpdate(QIODevice* device, const QByteArray& originalData, const PDFDocument* document, const QString& password = QString());
 
     /// Calculates document file size, as if it is written to the disk.
     /// No file is accessed by this function; document is written

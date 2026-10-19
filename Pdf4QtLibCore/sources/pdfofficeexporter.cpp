@@ -51,10 +51,24 @@ public:
 
     static QString escape(const QString& text)
     {
-        QString result = text.toHtmlEscaped();
-        // XML 1.0 has no control characters except tab, new line and carriage return
-        result.removeIf([](QChar c) { return c.unicode() < 0x20 && c != '\t' && c != '\n' && c != '\r'; });
-        return result;
+        // XML 1.0 allows tab, new line, carriage return, U+0020-U+D7FF, U+E000-U+FFFD
+        // and the supplementary planes (a valid surrogate pair); the rest is removed
+        QString clean;
+        clean.reserve(text.size());
+        for (qsizetype i = 0; i < text.size(); ++i)
+        {
+            const QChar c = text[i];
+            if (c.isHighSurrogate() && i + 1 < text.size() && text[i + 1].isLowSurrogate())
+            {
+                clean += c;
+                clean += text[++i];
+            }
+            else if (!c.isSurrogate() && (c.unicode() >= 0x20 || c == QChar('\t') || c == QChar('\n') || c == QChar('\r')) && c.unicode() != 0xFFFE && c.unicode() != 0xFFFF)
+            {
+                clean += c;
+            }
+        }
+        return clean.toHtmlEscaped();
     }
 
     static void appendUInt16(QByteArray& data, quint16 value)
@@ -211,35 +225,71 @@ PDFOfficeExporter::Pages PDFOfficeExporter::extract(const PDFDocument* document)
 
 bool PDFOfficeExporter::parseNumber(const QString& text, double& value)
 {
+    // Only unambiguous numbers become numbers; anything else stays text (an ID number,
+    // a phone number or a date shown as a number would be a wrong value in Excel)
     QString number = text.trimmed();
-    number.remove(QRegularExpression(QStringLiteral("^(R|ZAR|\\$|€|£)\\s*")));
-    number.remove(QChar(' '));
-    number.remove(QChar(0x00A0));
-    static const QRegularExpression numeric(QStringLiteral("^-?[0-9][0-9.,]*$"));
-    if (number.isEmpty() || !numeric.match(number).hasMatch())
+    static const QRegularExpression currency(QStringLiteral("^(R|ZAR|\\$|€|£)\\s*"));
+    number.remove(currency);
+    number.replace(QChar(0x00A0), QChar(' '));
+    bool negative = false;
+    if (number.startsWith(QChar('-')))
+    {
+        negative = true;
+        number = number.mid(1).trimmed().remove(currency);   // "-R 250.00"
+    }
+
+    // Forms accepted, with the group separator removed and the decimal separator kept:
+    static const QRegularExpression plain(QStringLiteral("^\\d+$"));                                   // 1234
+    static const QRegularExpression spaceGroups(QStringLiteral("^\\d{1,3}( \\d{3})+([.,]\\d+)?$"));     // 1 234 567,89
+    static const QRegularExpression commaGroups(QStringLiteral("^\\d{1,3}(,\\d{3}){2,}(\\.\\d+)?$|^\\d{1,3},\\d{3}\\.\\d+$"));  // 1,234,567 / 1,234.50
+    static const QRegularExpression pointGroups(QStringLiteral("^\\d{1,3}(\\.\\d{3}){2,}(,\\d+)?$|^\\d{1,3}\\.\\d{3},\\d+$"));  // 1.234.567 / 1.234,50
+    static const QRegularExpression decimal(QStringLiteral("^\\d+[.,]\\d+$"));                          // 3.142 / 1,5
+
+    QString normalized;
+    if (plain.match(number).hasMatch())
+    {
+        // Leading zeros (phone numbers, codes) and 11 digits or more (ID numbers) are text
+        if ((number.size() > 1 && number.startsWith(QChar('0'))) || number.size() > 10)
+        {
+            return false;
+        }
+        normalized = number;
+    }
+    else if (spaceGroups.match(number).hasMatch())
+    {
+        normalized = QString(number).remove(QChar(' ')).replace(QChar(','), QChar('.'));
+    }
+    else if (commaGroups.match(number).hasMatch())
+    {
+        normalized = QString(number).remove(QChar(','));
+    }
+    else if (pointGroups.match(number).hasMatch())
+    {
+        normalized = QString(number).remove(QChar('.')).replace(QChar(','), QChar('.'));
+    }
+    else if (decimal.match(number).hasMatch())
+    {
+        // One separator followed by exactly three digits is either a decimal or a
+        // thousands group ("12.500"): ambiguous, kept as text - unless the whole part is
+        // 0, which no thousands group starts with ("0.125")
+        const qsizetype separator = number.indexOf(QRegularExpression(QStringLiteral("[.,]")));
+        if (number.size() - separator - 1 == 3 && number.left(separator) != QStringLiteral("0"))
+        {
+            return false;
+        }
+        normalized = QString(number).replace(QChar(','), QChar('.'));
+    }
+    else
     {
         return false;
     }
 
-    // The last separator is the decimal one, when two or fewer digits follow it
-    const qsizetype lastComma = number.lastIndexOf(QChar(','));
-    const qsizetype lastPoint = number.lastIndexOf(QChar('.'));
-    const qsizetype last = qMax(lastComma, lastPoint);
-    QString normalized;
-    if (last >= 0 && number.size() - last - 1 <= 2 && number.size() - last - 1 > 0)
-    {
-        normalized = number.left(last);
-        normalized.remove(QChar(',')).remove(QChar('.'));
-        normalized += QChar('.') + number.mid(last + 1);
-    }
-    else
-    {
-        normalized = number;
-        normalized.remove(QChar(',')).remove(QChar('.'));
-    }
-
     bool ok = false;
     value = normalized.toDouble(&ok);
+    if (negative)
+    {
+        value = -value;
+    }
     return ok;
 }
 

@@ -29,6 +29,8 @@
 #include "pdfcertificatemanagerdialog.h"
 #include "signdialog.h"
 #include "pdfdocumentsigner.h"
+#include "pdfdocumentreader.h"
+#include "pdfsecurityhandler.h"
 #include "pdfsignaturestamp.h"
 #include "signaturelibrarydialog.h"
 #include "initialsdialog.h"
@@ -45,6 +47,8 @@
 #include <QMainWindow>
 #include <QMessageBox>
 #include <QFileDialog>
+#include <QLineEdit>
+#include <QInputDialog>
 #include <QDir>
 
 namespace pdfplugin
@@ -372,7 +376,39 @@ void SignaturePlugin::onSignElectronically()
     }
 }
 
-void SignaturePlugin::onSignDigitally()
+std::optional<QString> SignaturePlugin::getOpenPassword(const QByteArray& originalData)
+{
+    auto opens = [&originalData](const QString& password)
+    {
+        bool isOffered = false;
+        pdf::PDFDocumentReader reader(nullptr, [&](bool* ok) { *ok = !isOffered; isOffered = true; return password; }, false, false);
+        reader.readFromBuffer(originalData);
+        return reader.getReadingResult() == pdf::PDFDocumentReader::Result::OK;
+    };
+    if (opens(QString()))
+    {
+        return QString();
+    }
+
+    for (int attempt = 0; attempt < 3; ++attempt)
+    {
+        bool ok = false;
+        const QString password = QInputDialog::getText(m_dataExchangeInterface->getMainWindow(), tr("Encrypted Document"),
+                                                       attempt == 0 ? tr("Password of the document (needed to add the signature to it):") : tr("The password is wrong. Password of the document:"),
+                                                       QLineEdit::Password, QString(), &ok);
+        if (!ok)
+        {
+            return std::nullopt;
+        }
+        if (opens(password))
+        {
+            return password;
+        }
+    }
+    return std::nullopt;
+}
+
+bool SignaturePlugin::onSignDigitally()
 {
     // Jakub Melka: do we have certificates? If not,
     // open certificate dialog, so the user can create
@@ -390,7 +426,10 @@ void SignaturePlugin::onSignDigitally()
         dialog.setCertification(*m_suggestedCertification);
         m_suggestedCertification.reset();
     }
-    if (dialog.exec() == SignDialog::Accepted)
+    if (dialog.exec() != SignDialog::Accepted)
+    {
+        return false;
+    }
     {
         const SignDialog::SignatureType signatureType = dialog.getSignatureType();
 
@@ -406,7 +445,7 @@ void SignaturePlugin::onSignDigitally()
                                     tr("No signature graphics were created, the signature will have no visible appearance. Continue?"),
                                     QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
             {
-                return;
+                return false;
             }
             visibleSignature = false;
         }
@@ -416,7 +455,7 @@ void SignaturePlugin::onSignDigitally()
                                     tr("Signature graphics span multiple pages. Only the first page containing graphics will be used. Continue?"),
                                     QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
             {
-                return;
+                return false;
             }
         }
 
@@ -424,7 +463,7 @@ void SignaturePlugin::onSignDigitally()
         if (catalog->getPageCount() == 0)
         {
             QMessageBox::critical(m_widget, tr("Error"), tr("The document has no page for a signature widget."));
-            return;
+            return false;
         }
 
         const pdf::PDFCertificateEntry* certificate = dialog.getCertificate();
@@ -457,6 +496,27 @@ void SignaturePlugin::onSignDigitally()
             originalFile.close();
         }
 
+        // An encrypted original is read again for the incremental update, with its password
+        const pdf::PDFSecurityHandler* securityHandler = m_document->getStorage().getSecurityHandler();
+        if (securityHandler && securityHandler->getMode() != pdf::EncryptionMode::None && !parameters.originalDocumentData.isEmpty())
+        {
+            const std::optional<QString> openPassword = getOpenPassword(parameters.originalDocumentData);
+            if (!openPassword)
+            {
+                return false;
+            }
+            parameters.openPassword = *openPassword;
+        }
+
+        // A lock "no changes" would stop the other party, which still has to sign
+        if (m_isOtherPartySigning && parameters.certification == pdf::PDFDocumentSigner::Certification::NoChanges &&
+            QMessageBox::warning(m_widget, tr("Sign Contract"),
+                                 tr("Lines are left for another party, but the lock \"No changes allowed\" would stop them from signing. Lock anyway?"),
+                                 QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
+        {
+            return false;
+        }
+
         // Verification stamp drawn under the visible signature: who signed, when, how
         // the document is locked, and the fingerprints of the certificate and of the
         // file before this signature, also as a QR code. The proof itself is the
@@ -464,7 +524,10 @@ void SignaturePlugin::onSignDigitally()
         std::optional<pdf::PDFSignatureStamp::Data> stamp;
         if (visibleSignature)
         {
-            stamp = pdf::PDFSignatureStamp::create(certificate->info, parameters.signingTime, parameters.certification, parameters.originalDocumentData);
+            // The file fingerprint can be checked only where the signature is appended to the
+            // original bytes; encryption writes the document anew
+            const QByteArray fingerprinted = parameters.encryptionUserPassword ? QByteArray() : parameters.originalDocumentData;
+            stamp = pdf::PDFSignatureStamp::create(certificate->info, parameters.signingTime, parameters.certification, fingerprinted);
         }
 
         pdf::PDFSignatureFactory::TimestampSettings timestampSettings;
@@ -500,7 +563,7 @@ void SignaturePlugin::onSignDigitally()
 
             default:
                 Q_ASSERT(false);
-                return;
+                return false;
         }
 
         // Jakub Melka: the signature field is created by the signer, because the
@@ -597,32 +660,41 @@ void SignaturePlugin::onSignDigitally()
         // the network, so the signing can take a while.
         QByteArray signedDocument;
         QApplication::setOverrideCursor(Qt::WaitCursor);
-        const pdf::PDFDocumentSigner::Result signingResult = pdf::PDFDocumentSigner::sign(parameters, signedDocument);
+        pdf::PDFDocumentSigner::Result signingResult = pdf::PDFDocumentSigner::Result::SigningFailed;
+        QString exceptionMessage;
+        try
+        {
+            signingResult = pdf::PDFDocumentSigner::sign(parameters, signedDocument);
+        }
+        catch (const std::exception& exception)
+        {
+            exceptionMessage = QString::fromLocal8Bit(exception.what());
+        }
         QApplication::restoreOverrideCursor();
 
         if (signingResult != pdf::PDFDocumentSigner::Result::OK)
         {
-            const QString errorMessage = !timestampErrorMessage.isEmpty() ? timestampErrorMessage
-                                                                         : pdf::PDFDocumentSigner::getResultMessage(signingResult);
+            const QString errorMessage = !exceptionMessage.isEmpty() ? tr("The document could not be signed: %1").arg(exceptionMessage)
+                                                                     : (!timestampErrorMessage.isEmpty() ? timestampErrorMessage : pdf::PDFDocumentSigner::getResultMessage(signingResult));
             QMessageBox::critical(m_widget, tr("Error"), errorMessage);
-            return;
+            return false;
         }
 
         QString fileName = QFileDialog::getSaveFileName(m_dataExchangeInterface->getMainWindow(), tr("Save Signed Document"), getSignedFileName(), tr("Portable Document (*.pdf);;All files (*.*)"));
-        if (!fileName.isEmpty())
+        if (fileName.isEmpty())
         {
-            QFile signedFile(fileName);
-            if (signedFile.open(QFile::WriteOnly | QFile::Truncate))
-            {
-                signedFile.write(signedDocument);
-                signedFile.close();
-                checkSavedFile(fileName, signatureName, parameters.encryptionUserPassword.value_or(QString()), isDocumentTimestamp);
-            }
-            else
-            {
-                QMessageBox::critical(m_widget, tr("Error"), tr("Failed to save the signed document."));
-            }
+            return false;
         }
+
+        QFile signedFile(fileName);
+        if (!signedFile.open(QFile::WriteOnly | QFile::Truncate) || signedFile.write(signedDocument) != signedDocument.size())
+        {
+            QMessageBox::critical(m_widget, tr("Error"), tr("Failed to save the signed document."));
+            return false;
+        }
+        signedFile.close();
+        checkSavedFile(fileName, signatureName, parameters.encryptionUserPassword.value_or(parameters.openPassword), isDocumentTimestamp);
+        return true;
     }
 }
 
@@ -757,7 +829,7 @@ void SignaturePlugin::onSignContract()
     signature.loadFromData(m_signatureLibrary.getSlot(dialog.getSlotIndex()).png, "PNG");
 
     std::vector<pdf::PDFPageInitials::Placement> placements;
-    bool isOtherPartySigning = false;
+    std::vector<pdf::PDFSignatureLineFinder::SignatureLine> otherLines;
     const std::vector<ContractSigningDialog::Decision> decisions = dialog.getDecisions();
     for (size_t i = 0; i < decisions.size(); ++i)
     {
@@ -765,43 +837,84 @@ void SignaturePlugin::onSignContract()
         {
             placements.push_back({ dialog.getLines()[i].pageIndex, dialog.getLines()[i].rectangle });
         }
-        isOtherPartySigning = isOtherPartySigning || decisions[i] == ContractSigningDialog::Decision::OtherParty;
+        else if (decisions[i] == ContractSigningDialog::Decision::OtherParty)
+        {
+            otherLines.push_back(dialog.getLines()[i]);
+        }
     }
 
+    // The document before the workflow comes back, when it does not end signed
+    const pdf::PDFDocumentPointer original(new pdf::PDFDocument(*m_document));
+
     // The image of the last line is the visible appearance of the digital signature,
-    // with the verification stamp; the other lines get the image into the page.
+    // with the verification stamp; the other lines get the image into the page. On a
+    // page turned by /Rotate the appearance would be drawn turned, so there every line
+    // gets the image into the page and the digital signature is invisible.
     const pdf::PDFPageInitials::Placement lastPlacement = placements.back();
-    placements.pop_back();
+    const pdf::PDFPage* lastPage = m_document->getCatalog()->getPage(lastPlacement.pageIndex);
+    const bool isLastOnRotatedPage = lastPage->getPageRotation() != pdf::PageRotation::None;
+    if (!isLastOnRotatedPage)
+    {
+        placements.pop_back();
+    }
+
+    pdf::PDFDocumentPointer document = original;
     if (!placements.empty())
     {
-        pdf::PDFDocumentPointer document = pdf::PDFPageInitials::drawImages(m_document, signature, placements);
+        document = pdf::PDFPageInitials::drawImages(document.data(), signature, placements);
         if (!document)
         {
             QMessageBox::critical(m_widget, tr("Sign Contract"), tr("The signature could not be placed on the lines."));
             return;
         }
+    }
 
-        pdf::PDFModifiedDocument::ModificationFlags flags;
-        flags.setFlag(pdf::PDFModifiedDocument::PageContents);
+    // The other party gets empty signature fields on its lines, which a reader offers to sign
+    if (!otherLines.empty())
+    {
+        if (pdf::PDFDocumentPointer withFields = pdf::PDFSignatureLineFinder::addSignatureFields(document.data(), otherLines, tr("Signature of other party ")))
+        {
+            document = withFields;
+        }
+    }
+
+    pdf::PDFModifiedDocument::ModificationFlags flags;
+    flags.setFlag(pdf::PDFModifiedDocument::PageContents);
+    flags.setFlag(pdf::PDFModifiedDocument::FormField);
+    flags.setFlag(pdf::PDFModifiedDocument::Annotation);
+    if (document != original)
+    {
         Q_EMIT m_widget->getToolManager()->documentModified(pdf::PDFModifiedDocument(document, nullptr, flags));
     }
 
     setActive(true);
     m_scene.clear();
-    const pdf::PDFPage* lastPage = m_document->getCatalog()->getPage(lastPlacement.pageIndex);
-    pdf::PDFPageContentImageElement* element = new pdf::PDFPageContentImageElement();
-    element->setPageIndex(lastPlacement.pageIndex);
-    // ponytail: the scene draws in unrotated page space, so on a page turned by /Rotate
-    // the last signature is drawn turned with it; route it through PDFPageInitials if
-    // rotated contracts turn up.
-    element->setRectangle(pdf::PDFPageInitials::getDisplayToPageTransform(lastPage).mapRect(pdf::PDFPageInitials::getFittedDisplayRectangle(lastPage, lastPlacement.area, signature.size())));
-    element->setContent(m_signatureLibrary.getSlot(dialog.getSlotIndex()).png);
-    m_scene.addElement(element);
+    if (!isLastOnRotatedPage)
+    {
+        pdf::PDFPageContentImageElement* element = new pdf::PDFPageContentImageElement();
+        element->setPageIndex(lastPlacement.pageIndex);
+        element->setRectangle(pdf::PDFPageInitials::getDisplayToPageTransform(lastPage).mapRect(pdf::PDFPageInitials::getFittedDisplayRectangle(lastPage, lastPlacement.area, signature.size())));
+        element->setContent(m_signatureLibrary.getSlot(dialog.getSlotIndex()).png);
+        m_scene.addElement(element);
+    }
 
     // Another party still signs: certify so that signing stays allowed (P = 2)
-    m_suggestedCertification = isOtherPartySigning ? pdf::PDFDocumentSigner::Certification::FormFilling : pdf::PDFDocumentSigner::Certification::NoChanges;
-    onSignDigitally();
+    m_isOtherPartySigning = !otherLines.empty();
+    m_suggestedCertification = m_isOtherPartySigning ? pdf::PDFDocumentSigner::Certification::FormFilling : pdf::PDFDocumentSigner::Certification::NoChanges;
+    const bool isSigned = onSignDigitally();
     m_suggestedCertification.reset();
+    m_isOtherPartySigning = false;
+
+    if (!isSigned)
+    {
+        // Nothing half done stays in the document
+        m_scene.clear();
+        if (document != original)
+        {
+            Q_EMIT m_widget->getToolManager()->documentModified(pdf::PDFModifiedDocument(original, nullptr, flags));
+        }
+        QMessageBox::information(m_widget, tr("Sign Contract"), tr("The contract was not signed; the document is as it was before."));
+    }
 }
 
 void SignaturePlugin::onSignPack()
@@ -897,18 +1010,21 @@ void SignaturePlugin::onSignPack()
 
         const QString filter = packDialog.getLineFilter();
         std::vector<pdf::PDFPageInitials::Placement> placements;
-        size_t otherLines = 0;
+        std::vector<pdf::PDFSignatureLineFinder::SignatureLine> otherPartyLines;
+        QStringList signedLabels;
         for (const pdf::PDFSignatureLineFinder::SignatureLine& line : pdf::PDFSignatureLineFinder::find(document.data()))
         {
             if (filter.isEmpty() || line.label.contains(filter, Qt::CaseInsensitive) || line.fieldName.contains(filter, Qt::CaseInsensitive))
             {
                 placements.push_back({ line.pageIndex, line.rectangle });
+                signedLabels << tr("p. %1 \"%2\"").arg(line.pageIndex + 1).arg(line.label.left(40));
             }
             else
             {
-                ++otherLines;
+                otherPartyLines.push_back(line);
             }
         }
+        const size_t otherLines = otherPartyLines.size();
         if (placements.empty())
         {
             report << tr("%1: no signature line of yours was found, the contract was not signed.").arg(part.name);
@@ -923,6 +1039,14 @@ void SignaturePlugin::onSignPack()
             if (pdf::PDFDocumentPointer drawn = pdf::PDFPageInitials::drawImages(document.data(), signature, placements))
             {
                 document = drawn;
+            }
+        }
+        // The lines of the other parties get empty signature fields to sign in
+        if (!otherPartyLines.empty())
+        {
+            if (pdf::PDFDocumentPointer withFields = pdf::PDFSignatureLineFinder::addSignatureFields(document.data(), otherPartyLines, tr("Signature of other party ")))
+            {
+                document = withFields;
             }
         }
 
@@ -945,7 +1069,15 @@ void SignaturePlugin::onSignPack()
 
         QByteArray signedDocument;
         timestampErrorMessage.clear();
-        const pdf::PDFDocumentSigner::Result result = pdf::PDFDocumentSigner::sign(parameters, signedDocument);
+        pdf::PDFDocumentSigner::Result result = pdf::PDFDocumentSigner::Result::SigningFailed;
+        try
+        {
+            result = pdf::PDFDocumentSigner::sign(parameters, signedDocument);
+        }
+        catch (const std::exception& exception)
+        {
+            timestampErrorMessage = QString::fromLocal8Bit(exception.what());
+        }
         if (result != pdf::PDFDocumentSigner::Result::OK)
         {
             report << tr("%1: %2").arg(part.name, !timestampErrorMessage.isEmpty() ? timestampErrorMessage : pdf::PDFDocumentSigner::getResultMessage(result));
@@ -968,9 +1100,12 @@ void SignaturePlugin::onSignPack()
         }
         file.close();
 
-        const pdf::PDFDocumentSigner::SignedFileCheck check = pdf::PDFDocumentSigner::checkSignedFile(signedDocument, fieldName, parameters.encryptionUserPassword.value_or(QString()));
-        report << tr("%1: %2 lines signed, %3 left for another party, %4 - %5")
-                      .arg(part.name).arg(placements.size() + 1).arg(otherLines)
+        // The check reads the file back from the disk, as a reader gets it
+        QFile writtenFile(fileName);
+        const QByteArray written = writtenFile.open(QFile::ReadOnly) ? writtenFile.readAll() : QByteArray();
+        const pdf::PDFDocumentSigner::SignedFileCheck check = pdf::PDFDocumentSigner::checkSignedFile(written, fieldName, parameters.encryptionUserPassword.value_or(QString()));
+        report << tr("%1: %2 lines signed (%3), %4 left for another party, %5 - %6")
+                      .arg(part.name).arg(placements.size() + 1).arg(signedLabels.join(", ")).arg(otherLines)
                       .arg(check.isOK() ? pdf::PDFSignatureStamp::getCertificationText(check.certification) : tr("CHECK FAILED"))
                       .arg(QFileInfo(fileName).fileName());
         failures += check.isOK() ? 0 : 1;

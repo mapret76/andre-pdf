@@ -504,3 +504,28 @@ upstream author's machine, not ours).
 - **Autopilot finished.** What remains needs Andre (see "Waiting on Andre" at the top):
   the `workflow` scope (MSI file name, Android APK), and the gates of phases 1, 2, 3 and 6
   on his PC with his certificate and his own documents. The Routine was deleted.
+
+### 2026-10-19 - R0 review fixed; B4 versions and B5 updates built (review pending)
+- R0: two independent reviewers (fresh context, frozen worktree at 0ac8a12) found 3 high,
+  12 medium and 19 low issues. All high and medium ones are fixed with tests; see
+  `docs/andre/reviews/R0-fixes.md` (reports R0-A.md and R0-B.md beside it). Open (low):
+  password wiping (upstream), zip64, multi-column export order, Android "open with",
+  scan-font harvest speed.
+- B4: `ANDRE_PDF_VERSION` 1.0.0 (programs, MSI, MSIX 1.0.0.0, version.txt); the engine
+  keeps 1.6.0.0. `CHANGELOG.md` embedded (`:/andre-pdf/CHANGELOG.md`), `PDFVersionHistory`
+  (parse, numeric compare, newer releases), Help -> Version History, "What's new" once
+  after an update (not on the offscreen test platform).
+- B5: `PDFUpdateChecker`: manifest `andre-pdf-update.json` + `.sig` from
+  `releases/latest/download`, ECDSA P-256 / SHA-256 verified with the public key compiled in
+  (`Pdf4QtLibCore/andre-pdf-release-key.pub.pem`, private key
+  `~/.config/andre-pdf/release-signing-key.pem` on andre-vault, owner-only, Andre's choice);
+  newer version only (replay ignored), product name, HTTPS GitHub hosts, size limit,
+  downloaded installer checked against size and SHA-256 (deleted otherwise), msiexec from
+  System32. Help -> Check for Updates..., Check for Updates at Start (once a day), dialog
+  with the summary of every newer version, Download and Install / Remind Me Later / Skip
+  This Version; install asks to save, starts msiexec and quits.
+  `tools/andre-release.sh <Windows_MSI run>` and `tools/make_update_manifest.py` publish a
+  release (version and changelog of the built commit checked, signature verified before
+  upload). Tests `UnitTestsUpdate` (7) incl. interop with the release tools.
+- **Back up the release key offline**: without it no update can be signed (users would
+  have to install the next version by hand).
